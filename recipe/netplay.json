@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "about": "The online game's libraries, both MIT (licences/recomp-net-MIT.txt, licences/rbengine-MIT.txt). Downloaded once by tools/setup_game.py, verified, and built on the player's PC. libjuice (MPL-2.0) comes with the framework (third_party).",
+  "recomp_net": {
+    "file": "recomp-net-3b46cf7088d45a440ab20cf6d3ce7bdd5c2333c3.zip",
+    "url": "https://codeload.github.com/RetroPortingToolKit/recomp-net/zip/3b46cf7088d45a440ab20cf6d3ce7bdd5c2333c3",
+    "prefix": "recomp-net-3b46cf7088d45a440ab20cf6d3ce7bdd5c2333c3/",
+    "folder": "recomp-net",
+    "size": 625280,
+    "sha256": "18b829fed7f06687f3328be9004bac757d3970af2f33faf907b613f04f58f13d"
+  },
+  "rbengine": {
+    "file": "rbengine-2a03e73693acee0fb78076ea058642c931bef12e.zip",
+    "url": "https://codeload.github.com/RetroPortingToolKit/rbengine/zip/2a03e73693acee0fb78076ea058642c931bef12e",
+    "prefix": "rbengine-2a03e73693acee0fb78076ea058642c931bef12e/",
+    "folder": "rbengine",
+    "size": 12324,
+    "sha256": "3879eee1ab04bd3d36d164779acea68d0fd6eefc904c4a8d393ae41464b80e82"
+  }
+}

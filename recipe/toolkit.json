@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "id": "rr-toolkit-0.6",
+  "framework_revision": "7b3b1ea2869721d9d1fe546778952db3820c077d",
+  "toolchain": {
+    "file": "toolchain.zip",
+    "url": "https://github.com/RetroPortingToolKit/RetroPorting-Toolchains/releases/download/v1.0.14/cmake-clang-v1-windows-x64.zip",
+    "size": 209497009,
+    "sha256": "28da9742385e7ff875b3d9311e8ed89dbdc84f27b6ecba2bc0d0acc11f6d2b4d"
+  },
+  "framework": {
+    "file": "psxrecomp-pinned.zip",
+    "url": "https://codeload.github.com/RetroPortingToolKit/psxrecomp/zip/7b3b1ea2869721d9d1fe546778952db3820c077d",
+    "prefix": "psxrecomp-7b3b1ea2869721d9d1fe546778952db3820c077d/",
+    "size": 30154146,
+    "sha256": "41a1a9334bce1f57b543bae13186fc81bb4b50886eec3bdae77250ed1c3d19df"
+  },
+  "webp": {
+    "file": "webp.tar.gz",
+    "installed_file": "libwebp-4fa21912338357f89e4fd51cf2368325b59e9bd9.tar.gz",
+    "url": "https://codeload.github.com/webmproject/libwebp/tar.gz/4fa21912338357f89e4fd51cf2368325b59e9bd9",
+    "size": 3834766,
+    "sha256": "923f3382a47a2af185c3240c954cf004428b237bd7317413a95146d01eb4b94b"
+  },
+  "openbios_sha256": "fabe498fbf224e4721f12f31b6f5fe0659205e341dc4e5c5f91b9bd1a1011c57"
+}

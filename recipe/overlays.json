@@ -1,0 +1,86 @@
+{
+  "schema": "psxrecomp AOT methods v1",
+  "game_id": "SLUS-01053",
+  "disc_hashes": {
+    "sha256": "6fb1e22333f9243e0fb62c6c96975255a985cc75fac89772c528214575ca0806"
+  },
+  "expected_records": 3,
+  "strict_bounds": true,
+  "static_output": "overlays/overlays_static.c",
+  "images": [
+    {
+      "method": "fixed_address_files",
+      "files": [
+        "RASHCDI.BIN"
+      ],
+      "load_addr": "0x8005b5e8",
+      "entries": [
+        "0x80063a20",
+        "0x80063b90",
+        "0x80063fa0",
+        "0x80064610"
+      ],
+      "allow_missing": true
+    },
+    {
+      "method": "fixed_address_files",
+      "files": [
+        "RASHCDG.BIN"
+      ],
+      "load_addr": "0x8005b5e8",
+      "entries": [
+        "0x8005e1d8",
+        "0x800881b4",
+        "0x8008ab00",
+        "0x8008ce1c",
+        "0x8008ceec",
+        "0x8008cf10",
+        "0x8008cf40",
+        "0x8008cfdc",
+        "0x8009c474",
+        "0x8009c47c",
+        "0x800a8c58",
+        "0x800b783c",
+        "0x800b7954",
+        "0x800b7988",
+        "0x800c4610",
+        "0x800c4618",
+        "0x800c4620",
+        "0x800c4628",
+        "0x800c4634",
+        "0x800c4640",
+        "0x800c4660",
+        "0x800c466c",
+        "0x800c4674",
+        "0x800c467c",
+        "0x800c4698",
+        "0x800c46b4",
+        "0x800c46c4",
+        "0x800c4754"
+      ],
+      "allow_missing": true
+    },
+    {
+      "method": "fixed_address_files",
+      "files": [
+        "RASHCDF.BIN"
+      ],
+      "load_addr": "0x8005b5e8",
+      "entries": [
+        "0x800630d8",
+        "0x8006848c",
+        "0x800684ec",
+        "0x80068500",
+        "0x8006852c",
+        "0x80068548",
+        "0x80068614",
+        "0x8006c720",
+        "0x8007e738",
+        "0x8007e784",
+        "0x8007fedc",
+        "0x8007ff4c"
+      ],
+      "allow_missing": true
+    }
+  ]
+}
