@@ -1,0 +1,234 @@
+cmake_minimum_required(VERSION 3.20)
+project(RoadRashLocalBuild LANGUAGES C CXX)
+set(PSX_RECOMP_UI OFF CACHE BOOL "" FORCE)
+# RR_NETPLAY: the online game (runtime-netplay), a second build of the same sources by
+# install_game.py: recomp-net delay sync with ICE (RECOMP_NET_ROOT, RECOMP_RBENGINE_ROOT,
+# both pinned in recipe/netplay.json; libjuice from the framework's own third_party),
+# eight seats (two riders plus up to six AI-rider takeovers, rider_takeover.cpp).
+option(RR_NETPLAY "Build the online game" OFF)
+set(RR_MAX_PLAYERS 5)
+if(RR_NETPLAY)
+  set(RR_MAX_PLAYERS 8)
+  set(PSX_NETPLAY ON CACHE BOOL "" FORCE)
+  set(RNET_ENABLE_ICE ON CACHE BOOL "" FORCE)
+  set(RNET_ICE_BUNDLE_STATIC ON CACHE BOOL "" FORCE)
+  foreach(_off RNET_BUILD_TESTS RNET_BUILD_EXAMPLES RNET_BUILD_MODULE RBE_BUILD_TESTS)
+    set(${_off} OFF CACHE BOOL "" FORCE)
+  endforeach()
+else()
+  set(PSX_NETPLAY OFF CACHE BOOL "" FORCE)
+endif()
+set(PSX_REWIND OFF CACHE BOOL "" FORCE)
+set(PSX_OPENXR OFF CACHE BOOL "" FORCE)
+set(PSX_EXECUTION_PROFILE REFERENCE CACHE STRING "" FORCE)
+set(PSX_DEBUG_TOOLS ON CACHE BOOL "" FORCE)
+file(TO_CMAKE_PATH "${PSXRECOMP_ROOT}" PSXRECOMP_ROOT)
+file(TO_CMAKE_PATH "${RR_PRIVATE_ROOT}" RR_PRIVATE_ROOT)
+include("${PSXRECOMP_ROOT}/runtime/runtime.cmake")
+# 0.15: no PGXP flavour (its per-instruction value tracking everywhere is too
+# slow for native 60 FPS). Texture correction Full instead keeps the PGXP hooks
+# of the vertex-path functions only, behind a runtime switch (fast_timing.py).
+psxrecomp_add_game_runtime(rr-game PRELOADED_MODS_DIR NONE
+ WINDOW_TITLE "Road Rash Jailbreak"
+ # Relative: no install folder is compiled into the game, so every player's
+ # build of the same disc is byte-identical (the launcher always passes --game).
+ # MAX_PLAYERS 5: the framework hosts a multitap on port 1 (pads 1-4) only from 5 seats up;
+ # the launcher arms it (game.toml players=4) when Player 3 or 4 is set (Side Car versus).
+ # The online game: 8 (RR_MAX_PLAYERS above).
+ DEFAULT_GAME_CONFIG_PATH "game.toml"
+ MAX_PLAYERS ${RR_MAX_PLAYERS}
+ GAME_OVERLAY_STATIC_C "${RR_PRIVATE_ROOT}/stage2/overlays/overlays_static.c"
+ GEN_MARKER "${RR_PRIVATE_ROOT}/framework-generated/SLUS_010.53_dispatch.c"
+ GEN_FULL_GLOB "${RR_PRIVATE_ROOT}/framework-generated/SLUS_010.53_full_*.c")
+set_target_properties(rr-game PROPERTIES OUTPUT_NAME "RoadRashNativeResearch")
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+
+get_target_property(_sources rr-game SOURCES)
+# Generated game and overlay units build separately with the fast-timing profile.
+set(_generated ${_sources})
+list(FILTER _generated INCLUDE REGEX "framework-generated[/\\]|overlays_static")
+list(FILTER _sources EXCLUDE REGEX "framework-generated[/\\]|overlays_static")
+# Framework units replaced by recipes below.
+foreach(_unit dirty_ram_interp spu gpu_gl_renderer gpu psx_cycles interrupts memory dma render_thread)
+  list(FILTER _sources EXCLUDE REGEX "[/\\]${_unit}[.]c$")
+endforeach()
+list(FILTER _sources EXCLUDE REGEX "[/\\]duckstation_texture_pack[.]cpp$")
+list(FILTER _sources EXCLUDE REGEX "[/\\]debug_server[.]c$")
+# main.cpp: host pacing follows the 120 FPS race VBlank (race_timing.py extend_main,
+# race_pacing.cpp below). Removed here, before the recipes add their outputs.
+list(FILTER _sources EXCLUDE REGEX "[/\\]main[.]cpp$")
+set_property(TARGET rr-game PROPERTY SOURCES "${_sources}")
+
+function(rr_recipe script input output)
+  execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/${script}"
+    "${PSXRECOMP_ROOT}/runtime/src/${input}" "${CMAKE_CURRENT_BINARY_DIR}/${output}"
+    COMMAND_ERROR_IS_FATAL ANY)
+  target_sources(rr-game PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/${output}")
+endfunction()
+# spu.c / interrupts.c: SPU IRQ prediction (RR_SPU_EVENTS=1, PROGRESS-0.16-native-audio.md)
+# wraps the custom music mixer and the fast interrupt edges.
+rr_recipe(spu_events.py spu.c spu_music.c)
+rr_recipe(gpu_presentation.py gpu_gl_renderer.c gpu_presentation.c)
+rr_recipe(gpu_geometry.py gpu.c gpu_geometry.c)
+rr_recipe(race_timing.py psx_cycles.c race_timing.c)
+if(RR_NETPLAY)
+  # netplay_prep.py: race_timing's pacing plus the Road Rash fingerprint in the netplay content gate.
+  rr_recipe(netplay_prep.py main.cpp race_pacing.cpp)
+  # main.cpp with recomp-net includes recomp-ui's account header: a no-op shim (the launcher signs in).
+  set_source_files_properties("${CMAKE_CURRENT_BINARY_DIR}/race_pacing.cpp" PROPERTIES
+    INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/netplay-shim")
+else()
+  rr_recipe(race_timing.py main.cpp race_pacing.cpp)
+endif()
+rr_recipe(spu_events.py interrupts.c interrupt_edges.c)
+rr_recipe(texture_pack_speed.py duckstation_texture_pack.cpp texture_pack_speed.cpp)
+# debug_server.c: no localhost debug port when RR_PUBLIC_RELEASE is defined (the release build).
+rr_recipe(debug_server_release.py debug_server.c debug_server_release.c)
+rr_recipe(dma_fast.py dma.c dma_fast.c)
+rr_recipe(render_fast.py render_thread.c render_fast.c)
+# memory.c (fast race stores) in release mode: debugger-only per-store trace
+# rings off, main-RAM load fast paths on. No struct layout depends on
+# PSX_NO_DEBUG_TOOLS.
+execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/memory_fast.py"
+  "${PSXRECOMP_ROOT}/runtime/src/memory.c" "${CMAKE_CURRENT_BINARY_DIR}/memory_fast.c"
+  COMMAND_ERROR_IS_FATAL ANY)
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/memory_release.c"
+  "#define PSX_NO_DEBUG_TOOLS 1\n#include \"${CMAKE_CURRENT_BINARY_DIR}/memory_fast.c\"\n")
+target_sources(rr-game PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/memory_release.c")
+
+target_sources(rr-game PRIVATE "${RR_PRIVATE_ROOT}/stage2/guard/dirty_ram_interp_guarded.c"
+ native_guard.c native_kernel.c rider_enhancements.cpp rider_menu.cpp pc_services.cpp discord_presence.cpp custom_music.cpp native_ui.cpp taunt_voices.cpp mod_assets.cpp quick_resume.cpp menu_titles.cpp controls_screen.cpp netplay_session.cpp game_editor.cpp hud_editor.cpp gameplay_editor.cpp demo_courses.cpp showroom.cpp mouse_menus.cpp online_screen.cpp owner_assets.c
+ "${RR_PRIVATE_ROOT}/stage2/kernel-native/rr_kernel_code_bios.c"
+ "${RR_PRIVATE_ROOT}/stage2/kernel-native/rr_kernel_code_redirect.c"
+ "${RR_PRIVATE_ROOT}/stage2/kernel-native/rr_kernel_code_sdk.c")
+target_include_directories(rr-game PRIVATE "${PSXRECOMP_ROOT}/runtime/src" "${RR_PRIVATE_ROOT}/stage2/kernel-native")
+target_compile_definitions(rr-game PRIVATE RR_STRICT_NATIVE=1)
+if(RR_NETPLAY)
+  # RR_BUILD_FINGERPRINT (install_game.py): the same for every player with this release and
+  # game, so their online games match; it is folded into the netplay content gate.
+  set(RR_BUILD_FINGERPRINT "" CACHE STRING "Online build fingerprint (64 hex digits)")
+  if(NOT RR_BUILD_FINGERPRINT MATCHES "^[0-9a-f]+$")
+    message(FATAL_ERROR "RR_NETPLAY needs RR_BUILD_FINGERPRINT")
+  endif()
+  target_sources(rr-game PRIVATE rider_takeover.cpp)
+  set_source_files_properties(netplay_session.cpp PROPERTIES COMPILE_DEFINITIONS "RR_BUILD_FINGERPRINT=\"${RR_BUILD_FINGERPRINT}\"")
+  target_link_options(rr-game PRIVATE "-Wl,--wrap=func_80011C4C" "-Wl,--wrap=func_8001CB3C" "-Wl,--wrap=func_80039F68" "-Wl,--wrap=func_80050678")
+  # The online libraries are built without relpath_cc.py; libjuice's log lines carry __FILE__.
+  # Map the data folder (build, sources and toolkit all live in it) as relpath_cc.py does.
+  get_filename_component(_rr_data "${CMAKE_BINARY_DIR}" DIRECTORY)
+  foreach(_t juice-static recomp_net retcomm_rbengine)
+    if(TARGET ${_t})
+      target_compile_options(${_t} PRIVATE "-ffile-prefix-map=${_rr_data}=data")
+    endif()
+  endforeach()
+endif()
+# Reproducible builds: the same disc gives every player a byte-identical game,
+# whatever their install folder (no paths, no link time stamp), so antivirus
+# reputation and false-positive reports cover everyone.
+set(RR_PREFIX_MAPS "-ffile-prefix-map=${PSXRECOMP_ROOT}=psxrecomp" "-ffile-prefix-map=${RR_PRIVATE_ROOT}=game"
+  "-ffile-prefix-map=${CMAKE_CURRENT_BINARY_DIR}=build" "-ffile-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}=source")
+target_compile_options(rr-game PRIVATE ${RR_PREFIX_MAPS})
+# Speed profile (PGO, +17-36% measured): recipe/game.profdata, trained on this very
+# build layout (tools/pgo_train_public.py), so its function names are the relative
+# compile paths every install uses. It holds function names, control-flow hashes and
+# execution counts of the compiled code only: no game code or data. RR_PGO_GENERATE
+# builds the instrumented trainer instead. Set before the fast-timing library copies
+# rr-game's options, so the generated game code gets the same profile.
+option(RR_PGO_GENERATE "Instrumented build for training the speed profile" OFF)
+set(RR_PGO_USE "" CACHE FILEPATH "Speed profile (.profdata); empty = none")
+if(RR_PGO_GENERATE)
+  target_compile_options(rr-game PRIVATE -fprofile-generate)
+  target_link_options(rr-game PRIVATE -fprofile-generate)
+elseif(RR_PGO_USE AND EXISTS "${RR_PGO_USE}")
+  target_compile_options(rr-game PRIVATE "-fprofile-use=${RR_PGO_USE}"
+    -Wno-profile-instr-unprofiled -Wno-profile-instr-out-of-date -Wno-backend-plugin)
+  # A new profile at the same path must recompile everything (objects built with
+  # different profiles cannot be linked together): its hash is in every command.
+  file(SHA256 "${RR_PGO_USE}" _pgo_hash)
+  string(SUBSTRING "${_pgo_hash}" 0 16 _pgo_hash)
+  target_compile_definitions(rr-game PRIVATE "RR_PGO_PROFILE=0x${_pgo_hash}")
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${RR_PGO_USE}")
+  # The linker's call-graph function sort (fed by the profile) orders code
+  # differently on every link; without it every player's build is identical.
+  target_link_options(rr-game PRIVATE "-Wl,-Xlink=-call-graph-profile-sort:no")
+endif()
+# No symbol table either: it names CMake's per-folder object paths (and the game never reads it).
+target_link_options(rr-game PRIVATE "-Wl,--no-insert-timestamp" "-Wl,--build-id=none" "-Wl,--strip-all")
+
+# Fast-timing generated code: same flags as rr-game, patched timing headers first.
+execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/fast_timing.py"
+  "${PSXRECOMP_ROOT}/runtime/include" "${CMAKE_CURRENT_BINARY_DIR}/fast-include"
+  COMMAND_ERROR_IS_FATAL ANY)
+get_target_property(_inc rr-game INCLUDE_DIRECTORIES)
+get_target_property(_defs rr-game COMPILE_DEFINITIONS)
+get_target_property(_opts rr-game COMPILE_OPTIONS)
+get_target_property(_libs rr-game LINK_LIBRARIES)
+# Texture correction Full (opt-in, PROGRESS-0.15-geometry-correction.md): units with
+# vertex-path functions are compiled from a copy in which those functions also get a
+# PGXP-hooked twin (fast_timing.py split_vertex_path). Off by default: it still costs
+# the On step about 10% of emulation speed.
+option(RR_TEXTURE_CORRECTION_FULL "Offer Precise vertices (PGXP on the vertex path)" ON)
+if(RR_TEXTURE_CORRECTION_FULL)
+  execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/fast_timing.py"
+    --split "${CMAKE_CURRENT_BINARY_DIR}/fast-src" ${_generated}
+    OUTPUT_VARIABLE _generated OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
+  target_compile_definitions(rr-game PRIVATE RR_PGXP_SPLIT=1)
+endif()
+add_library(rr-fast-gen OBJECT ${_generated})
+target_include_directories(rr-fast-gen BEFORE PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/fast-include")
+target_include_directories(rr-fast-gen PRIVATE ${_inc})
+target_compile_definitions(rr-fast-gen PRIVATE ${_defs} RR_FAST_TIMING=1)
+if(_opts)
+  target_compile_options(rr-fast-gen PRIVATE ${_opts})
+endif()
+if(_libs)
+  target_link_libraries(rr-fast-gen PRIVATE ${_libs})
+endif()
+target_sources(rr-game PRIVATE $<TARGET_OBJECTS:rr-fast-gen>)
+
+# Reproducible builds, part 2: compile with source paths relative to the build
+# folder (tools/relpath_cc.py, in front of ccache), so ThinLTO's names for
+# shared private symbols, and with them the data layout, are the same in every
+# install. The prefix maps above cover __FILE__; this covers the module itself.
+foreach(_lang C CXX)
+  get_property(_next TARGET rr-game PROPERTY ${_lang}_COMPILER_LAUNCHER)
+  set_property(TARGET rr-game rr-fast-gen PROPERTY ${_lang}_COMPILER_LAUNCHER
+    "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/relpath_cc.py" ${_next})
+  # Part 3: the link sees every input under a numbered name in the build folder (tools/relpath_ld.py).
+  set_property(TARGET rr-game PROPERTY ${_lang}_LINKER_LAUNCHER
+    "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/relpath_ld.py")
+endforeach()
+# Compiler settings (0.15 compiler pass). Baseline x86-64, no -march: building
+# for the player's own CPU measured no gain (with or without LTO) and would stop
+# a copied installation from running on an older CPU. No fast-math or other
+# relaxed floating-point/integer flags: online play needs two PCs to simulate
+# bit-identically. PGO is not used here (see PERFORMANCE.md).
+
+# ThinLTO over the runtime and the generated game code (+11% emulation
+# throughput on the test PC). RR_LINK_JOBS backend jobs (install_game.py picks
+# them from the PC's threads and memory, about 1 GB each); the output is the same
+# for any number. Falls back to a normal link if the compiler or linker cannot do it.
+# The --wrap hooks below keep working: lld stops LTO from inlining wrapped symbols.
+option(RR_THINLTO "Link the runtime with ThinLTO" ON)
+set(RR_LINK_JOBS 2 CACHE STRING "ThinLTO backend jobs")
+if(RR_THINLTO)
+  include(CheckCSourceCompiles)
+  set(CMAKE_REQUIRED_FLAGS "-flto=thin")
+  set(CMAKE_REQUIRED_LINK_OPTIONS "-flto=thin" "-Wl,--thinlto-jobs=${RR_LINK_JOBS}" "-Wl,--lto-O3")
+  check_c_source_compiles("int rr_lto_probe(int x) { return x * 3; } int main(void) { return rr_lto_probe(0); }" RR_THINLTO_LINKS)
+  unset(CMAKE_REQUIRED_FLAGS)
+  unset(CMAKE_REQUIRED_LINK_OPTIONS)
+  if(RR_THINLTO_LINKS)
+    target_compile_options(rr-game PRIVATE -flto=thin)
+    target_compile_options(rr-fast-gen PRIVATE -flto=thin)
+    target_link_options(rr-game PRIVATE -flto=thin "-Wl,--thinlto-jobs=${RR_LINK_JOBS}" -Wl,--lto-O3
+      "-Wl,--thinlto-cache-dir=${CMAKE_CURRENT_BINARY_DIR}/thinlto-cache")
+  else()
+    message(WARNING "ThinLTO is not available with this compiler/linker; linking without it")
+  endif()
+endif()
+
+target_link_options(rr-game PRIVATE "-Wl,--wrap=func_8002CDC8" "-Wl,--wrap=func_8002D718" "-Wl,--wrap=debug_server_cyc_observe"
+ "-Wl,--wrap=SDL_GL_SwapWindow" "-Wl,--wrap=gpu_vblank_tick" "-Wl,--wrap=spu_write"
+ "-Wl,--wrap=SDL_CreateWindow" "-lgdi32" "-lbcrypt" "-lmsimg32"
+ "-Wl,--wrap=SDL_PollEvent" "-Wl,--wrap=sio_set_pad_state_slot" "-Wl,--wrap=gl_renderer_init_context")
