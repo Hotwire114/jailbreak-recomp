@@ -60,7 +60,6 @@ Some antivirus programs (Norton, for example) hold a newly built, unsigned exe o
 - **Two-player split screen** with two controllers, or a controller and the keyboard, and **up to four players in Side Car (Versus)**, as the game always allowed with a PlayStation Multitap. Multiplayer races now have the race music (the PS1 played none), a fair random start in the pack instead of side by side behind it, and no blue flashing on the other player's rider.
 - **Play original game.** The untouched game, one click away, for comparison. It has its own opt-in options (resolution, texture filter, fullscreen, widescreen, 60 / 120 FPS, Esc to quit), all off to start.
 - **Report a problem.** Saves a ZIP with a picture of the launcher, recent logs and your settings (no game data).
-- **Robustness.** If the game reaches code the static recompile missed, it keeps running (that code is interpreted) and logs the address, instead of crashing.
 
 ### Additions
 - **Six beta courses restored.** The disc holds six courses the retail game never offered: **Meadows, Countryside, Alpine, Rash City, Cactus Hills and Coast**. They're raceable in Time Trial with their own records, and previewed with their original "polaroid" loading cards, also never shown in the retail game. Being unfinished beta courses, they appear to use their own fixed camera angles, which can't be changed, so a couple of the races are tricky to ride.
