@@ -83,6 +83,10 @@ Some antivirus programs (Norton, for example) hold a newly built, unsigned exe o
 - **Your bikes.** Set a bike for each rank, or leave it on Random for a random bike allowed at that rank.
 - **Rating.** Everyone starts at 1000 (up to 9999). High finishes gain points and low ones lose some, scaled by your rating against the rest of the room and by how many are in it.
 - A fair, random start in the pack for everyone. Rider names, taunt voices and rider looks show on every PC, and the music plays.
+Just to note on online:
+The public room list isn’t ours. It runs on a shared lobby server (netplay.retcomm.net) that several fan recomp projects use, since this project can’t run its own. That server requires a sign-in, so every room belongs to a real account. This keeps spam and abuse off a list shared with strangers, and lets bad actors be banned.
+Discord does the sign-in, not the game. The launcher opens Discord’s own page in the player’s browser. Discord shows what it shares before they approve; the lobby uses their Discord name in rooms. Their Discord password never reaches the launcher or the game.
+Once per PC. The launcher saves a key in %LOCALAPPDATA%\RoadRashJailbreak\netplay_secret, so players aren’t asked again. The docs say to treat that file like a password; Report a problem never includes it, and deleting it signs you out.
 
 Every PC needs the same release, with mods and cheats off. Online has been tested with two players so far.
 
