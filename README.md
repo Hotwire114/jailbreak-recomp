@@ -73,7 +73,6 @@ Some antivirus programs (Norton, for example) hold a newly built, unsigned exe o
 - **Cheats.** GameShark codes (built-in and your own) and the game's own unlock codes. Achievements stay locked while a cheat is on.
 - **26 achievements** to unlock, saved locally: finishing, winning, every mode, career ranks read from your saves and riding time, with progress and a reset. They stay locked while a cheat is on.
 - **A launcher dressed in the game's own art.** Riders, gangs, cops, Spaz's story and the unused beta cards illustrate each option, all decoded from your disc at run time.
-- **Discord presence** (optional; needs your own application ID in launcher.ini).
 
 ### Online
 **Online** on the game's main menu, or **Multiplayer** in the launcher:
