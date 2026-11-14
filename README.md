@@ -227,7 +227,7 @@ Never commit game files: disc images, extracted data, generated code, compiled g
 
 ## How this was made
 
-Most of the code in this repository was written by **Claude**, Anthropic's AI model, working in Claude Code. That covers the launcher, the PC adapters, the online play, the installer and the build tools. I directed the project: I chose what to build and how it should look and feel, play-tested every build, and decided what was ready to ship. The recompilation itself runs on the open-source [psxrecomp](https://github.com/RetroPortingToolKit/psxrecomp) framework, and the online play on recomp-net and rbengine, all by their own authors.
+Most of the code in this repository was written by **Claude**, Anthropic's AI model, working in Claude Code. That covers the launcher, the PC adapters, the online play, the installer and the build tools. The recompilation itself runs on the open-source [psxrecomp](https://github.com/RetroPortingToolKit/psxrecomp) framework, and the online play on recomp-net and rbengine, all by their own authors.
 
 ## Legal
 
