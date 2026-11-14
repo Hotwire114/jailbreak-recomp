@@ -16,8 +16,8 @@ Road Rash: Jailbreak was one of my favourite games from my youth, and even after
 
 | | |
 | --- | --- |
-| ![A race in 16:9 at 60 FPS](docs/screenshots/race-widescreen-60fps.jpg) | ![A rider crashing in the city](docs/screenshots/city-crash.jpg) |
-| *Widescreen race at 60 FPS, 1440p* | *Wrecked in the city, in full 16:9* |
+| ![A race in 16:9 at 60 FPS](docs/screenshots/race-widescreen-60fps.jpg) | ![The Rider look showroom: bike paint, name tag, outfit and colours](docs/screenshots/rider-look.jpg) |
+| *Widescreen race at 60 FPS, 1440p* | *Rider look: customise your bike and rider, shown live* |
 | ![Two-player split screen on the coast road](docs/screenshots/split-screen-two-player.jpg) | ![Time Trial at the stadium](docs/screenshots/time-trial-stadium.jpg) |
 | *Two-player split screen, filling the whole width* | *Time Trial with the HD HUD* |
 | ![The game's main menu with HD lettering](docs/screenshots/main-menu-hd.jpg) | ![The launcher's main menu](docs/screenshots/launcher.jpg) |
@@ -31,7 +31,7 @@ Get the latest **JailbreakRecomp_x.y.zip** from the [Releases](../../releases) p
 2. The first setup downloads the pinned build tools (about 240 MB from the psxrecomp project's public releases) and the two small online libraries, then compiles the game and its online version side by side on your PC's cores. This takes about 15-25 minutes on a recent PC (longer on an older one), only the first time. Keep the window open.
 3. Pick a setup (Recommended, Classic look or High end) and press **Play**.
 
-Requirements: Windows 10 or 11 (64-bit), about 8 GB of disk space, and an internet connection for the first setup (and for online play). After that the game runs offline and the disc image is no longer needed. Data lives in `%LOCALAPPDATA%\RoadRashJailbreak`.
+Requirements: Windows 10 or 11 (64-bit), about 10 GB of disk space, and an internet connection for the first setup (and for online play). After that the game runs offline and the disc image is no longer needed. Data lives in `%LOCALAPPDATA%\RoadRashJailbreak` unless you choose another folder or drive: click **Install to: … Change** under **Find your game** before installing, or use **Game installation → Change game folder** later (your saves, settings and mods move with it).
 
 **Coming from 1.0 or 1.1?** Unzip 1.2 to a new folder and run it. The first **Play** rebuilds your game with the 1.2 changes (the tools are already there, so it's quicker), and your saves and settings stay. From 1.2 on, the launcher updates itself: **Game installation → Check for updates** (it also checks once a day).
 
@@ -169,7 +169,7 @@ The heavier choices (Supersample 4x, the highest levels of detail) are marked in
 
 ## Where your files live
 
-Everything is in `%LOCALAPPDATA%\RoadRashJailbreak` (paste that into File Explorer's address bar):
+Everything is in `%LOCALAPPDATA%\RoadRashJailbreak` (paste that into File Explorer's address bar), or in the folder you picked with **Change game folder** (**Game installation → Open installation folder** opens whichever it is):
 
 | File or folder | What it holds |
 | --- | --- |
@@ -227,7 +227,7 @@ Never commit game files: disc images, extracted data, generated code, compiled g
 
 ## How this was made
 
-Most of the code in this repository was written by **Claude**, Anthropic's AI model, working in Claude Code. That covers the launcher, the PC adapters, the online play, the installer and the build tools. The recompilation itself runs on the open-source [psxrecomp](https://github.com/RetroPortingToolKit/psxrecomp) framework, and the online play on recomp-net and rbengine, all by their own authors.
+Most of the code in this repository was written by **Claude**, Anthropic's AI model, working in Claude Code. That covers the launcher, the PC adapters, the online play, the installer and the build tools. I directed the project: I chose what to build and how it should look and feel, play-tested every build, and decided what was ready to ship. The recompilation itself runs on the open-source [psxrecomp](https://github.com/RetroPortingToolKit/psxrecomp) framework, and the online play on recomp-net and rbengine, all by their own authors.
 
 ## Legal
 
