@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="source/project-logo.png" alt="Jailbreak Recomp logo" width="480">
+</p>
+
 # Jailbreak Recomp
 
 An unofficial native PC port of **Road Rash: Jailbreak** (PlayStation, 2000, USA version SLUS-01053), built by **static recompilation**. The PlayStation game code is translated into native C ahead of time and compiled for Windows, then run on the open-source [psxrecomp](https://github.com/RetroPortingToolKit/psxrecomp) runtime. It is not an emulator running the game image: the game runs as native code, which is what makes 60 and 120 FPS races, widescreen and the PC features below possible.
@@ -29,15 +33,15 @@ Get the latest **JailbreakRecomp_x.y.zip** from the [Releases](../../releases) p
 
 Requirements: Windows 10 or 11 (64-bit), about 8 GB of disk space, and an internet connection for the first setup (and for online play). After that the game runs offline and the disc image is no longer needed. Data lives in `%LOCALAPPDATA%\RoadRashJailbreak`.
 
-**Coming from 1.0?** Unzip 1.1 to a new folder and run it. The first **Play** rebuilds your game with the 1.1 features (the tools are already there, so it's quicker), and your saves and settings stay.
+**Coming from 1.0 or 1.1?** Unzip 1.2 to a new folder and run it. The first **Play** rebuilds your game with the 1.2 changes (the tools are already there, so it's quicker), and your saves and settings stay. From 1.2 on, the launcher updates itself: **Game installation → Check for updates** (it also checks once a day).
 
-Some antivirus programs (Norton, for example) hold a newly built, unsigned exe on its first launch, so the game looks frozen. Close it and press Play again, or add an exclusion for that folder.
+Some antivirus programs (Norton, for example) hold a newly built, unsigned exe on its first launch, so the game looks frozen. The launcher warns you when that can happen. Wait, or close it and press Play again, or add an exclusion for that folder.
 
 ## What's new compared with the PlayStation version
 
 ### Frame rate and performance
 - **Native 60 FPS races.** Real game frames at the original game speed, with no interpolation or frame generation. The PS1 ran races at about 20 FPS.
-- **120 FPS mode** for 120 Hz+ displays. If a moment is ever too heavy, the game drops to 60 FPS for a few seconds and keeps its speed.
+- **120 FPS mode** for 120 Hz+ displays, much faster in 1.2. If a moment is ever too heavy, the game drops to 60 FPS for a few seconds and keeps its speed; if two races in a row can't hold 120, it stays at 60 for the session and suggests a lower render resolution. **Precise vertices** costs extra speed, so on most PCs it's best at 60 FPS.
 - **Heavily optimised.** The emulated PS1 hardware does only the work a race can actually notice, and the build is profile-guided. A full 16-rider race has plenty of headroom at 120 FPS.
 
 ### Picture
@@ -60,6 +64,7 @@ Some antivirus programs (Norton, for example) hold a newly built, unsigned exe o
 - **Two-player split screen** with two controllers, or a controller and the keyboard, and **up to four players in Side Car (Versus)**, as the game always allowed with a PlayStation Multitap. Multiplayer races now have the race music (the PS1 played none), a fair random start in the pack instead of side by side behind it, and no blue flashing on the other player's rider.
 - **Play original game.** The untouched game, one click away, for comparison. It has its own opt-in options (resolution, texture filter, fullscreen, widescreen, 60 / 120 FPS, Esc to quit), all off to start.
 - **Report a problem.** Saves a ZIP with a picture of the launcher, recent logs and your settings (no game data).
+- **Robustness.** If the game reaches code the static recompile missed, it keeps running (that code is interpreted) and logs the address, instead of crashing.
 
 ### Additions
 - **Six beta courses restored.** The disc holds six courses the retail game never offered: **Meadows, Countryside, Alpine, Rash City, Cactus Hills and Coast**. They're raceable in Time Trial with their own records, and previewed with their original "polaroid" loading cards, also never shown in the retail game. Being unfinished beta courses, they appear to use their own fixed camera angles, which can't be changed, so a couple of the races are tricky to ride.
@@ -73,22 +78,25 @@ Some antivirus programs (Norton, for example) hold a newly built, unsigned exe o
 - **Cheats.** GameShark codes (built-in and your own) and the game's own unlock codes. Achievements stay locked while a cheat is on.
 - **26 achievements** to unlock, saved locally: finishing, winning, every mode, career ranks read from your saves and riding time, with progress and a reset. They stay locked while a cheat is on.
 - **A launcher dressed in the game's own art.** Riders, gangs, cops, Spaz's story and the unused beta cards illustrate each option, all decoded from your disc at run time.
+- **Discord presence** (optional; needs your own application ID in launcher.ini).
 
 ### Online
 **Online** on the game's main menu, or **Multiplayer** in the launcher:
 - **Play with friends.** Host a room and send its room code (RR-XXXXX-XXXXX). The router's port is opened automatically where it allows it (UPnP).
-- **Public rooms.** Race strangers through the public lobby, after signing in with Discord.
+- **Public rooms.** Race strangers through the public lobby, after signing in with Discord (see below; room codes need no account).
 - **Rooms of up to 8.** Two riders race as players, and players 3-8 each take over one of the AI riders in Skull-to-Skull. Rooms have chat.
 - **Vote on the race.** Before each race everyone votes between three courses (course and rank picked at random).
 - **Your bikes.** Set a bike for each rank, or leave it on Random for a random bike allowed at that rank.
 - **Rating.** Everyone starts at 1000 (up to 9999). High finishes gain points and low ones lose some, scaled by your rating against the rest of the room and by how many are in it.
 - A fair, random start in the pack for everyone. Rider names, taunt voices and rider looks show on every PC, and the music plays.
-Just to note on online:
-The public room list isn’t ours. It runs on a shared lobby server (netplay.retcomm.net) that several fan recomp projects use, since this project can’t run its own. That server requires a sign-in, so every room belongs to a real account. This keeps spam and abuse off a list shared with strangers, and lets bad actors be banned.
-Discord does the sign-in, not the game. The launcher opens Discord’s own page in the player’s browser. Discord shows what it shares before they approve; the lobby uses their Discord name in rooms. Their Discord password never reaches the launcher or the game.
-Once per PC. The launcher saves a key in %LOCALAPPDATA%\RoadRashJailbreak\netplay_secret, so players aren’t asked again. The docs say to treat that file like a password; Report a problem never includes it, and deleting it signs you out.
 
 Every PC needs the same release, with mods and cheats off. Online has been tested with two players so far.
+
+#### Why public rooms ask you to sign in with Discord
+- **Only public rooms need it.** Playing with friends by room code needs no account at all.
+- **The public room list isn't ours.** It runs on the shared recomp-net lobby server (`netplay.retcomm.net`), which several fan recomp projects use. This project can't run a server of its own. The lobby's operator requires a sign-in before anyone can list or join rooms, so that every room belongs to a real account. That keeps spam and abuse off a list shared with strangers, and lets bad actors be banned.
+- **Discord does the sign-in, not this game.** The launcher opens Discord's own page in your browser. You approve there, and Discord shows exactly what it shares before you do (the lobby uses your Discord name in rooms). Your Discord password never reaches the launcher or the game.
+- **Once per PC.** After you approve, the launcher saves a key for this PC in `%LOCALAPPDATA%\RoadRashJailbreak\netplay_secret`, so you aren't asked again. The key itself is never sent anywhere: the launcher proves it has it, and the lobby gives it a short-lived session. Treat the file like a password: don't share it or post it. **Report a problem** never includes it. To sign out, delete it.
 
 ## Controls
 
@@ -172,6 +180,7 @@ Everything is in `%LOCALAPPDATA%\RoadRashJailbreak` (paste that into File Explor
 | `music\` | Your own tracks |
 | `achievements.ini` | Your achievements and progress |
 | `reports\` | Bug reports from **Game installation → Report a problem** |
+| `downloads\` | Build tools and updates, kept so later rebuilds work offline |
 | `setup.log`, `build.log`, `build-online.log`, `runtime\runtime.log` | Logs from setup, the builds and the game |
 
 To uninstall, delete that folder and the folder you unzipped. Copy `saves` somewhere first if you want to keep your progress.
@@ -180,9 +189,11 @@ To uninstall, delete that folder and the folder you unzipped. Copy `saves` somew
 
 **The game looks frozen the first time I press Play.** That's usually antivirus (Norton, for example) checking the newly built game. Close it and press Play again, or add an exclusion for `%LOCALAPPDATA%\RoadRashJailbreak`.
 
-**Setup says a build tool is damaged or "is not recognized".** Your antivirus removed one of the build tools while the game was compiling (Norton has done this with `cmake.exe`). Restore it from the antivirus's quarantine and add an exclusion for `%LOCALAPPDATA%\RoadRashJailbreak`, then run the setup again.
+**Setup says a build tool is damaged or "is not recognized".** Your antivirus removed one of the build tools while the game was compiling (Norton has done this with `cmake.exe`). Restore it from the antivirus's quarantine and add an exclusion for `%LOCALAPPDATA%\RoadRashJailbreak`, then choose **Game installation → Run setup again**.
 
-**Setup failed.** Check your internet connection and free disk space, then try again from **Game installation → Prepare local game build**. If it still fails, use **Report a problem** and attach the zip to an issue here.
+**Setup failed.** The launcher says why in plain words (a full drive, antivirus, the wrong disc, a failed download). Fix that, then choose **Game installation → Run setup again**, which rebuilds the game from scratch (15-25 minutes; saves and settings stay). If it still fails, use **Report a problem** and attach the zip to an issue here.
+
+**How do updates work?** Once a day the launcher asks GitHub for this project's latest release (nothing about you or your PC is sent). When there's a new one, **Game installation** shows **Update to version X**: it downloads it, checks it against GitHub's checksum, replaces the launcher's files and restarts. Saves, settings and your installed game stay; if the game itself changed, it rebuilds once on your next **Play**. To turn the daily check off, add `check=0` under `[update]` in `launcher.ini`.
 
 **Which version of the game do I need?** The USA PlayStation release (SLUS-01053), as a single-track .bin/.cue or .iso. The launcher tells you if your disc image isn't the supported one.
 
@@ -192,7 +203,7 @@ To uninstall, delete that folder and the folder you unzipped. Copy `saves` somew
 
 **Can I play online?** Yes, from 1.1: **Online** on the game's main menu. Everyone needs the same release.
 
-**Online says the online game isn't built.** The setup builds it beside the main game and needs internet for its two libraries. Run **Game installation → Prepare local game build** again; `build.log` and `build-online.log` say why if it fails.
+**Online says the online game isn't built.** The setup builds it beside the main game and needs internet for its two libraries. Choose **Game installation → Run setup again**; `build.log` and `build-online.log` say why if it fails.
 
 ## Building from source
 
@@ -202,7 +213,7 @@ This repository is the release source: the launcher, the PC adapters that extend
 - **The game:** built by the launcher on the player's PC from their own disc. The launcher downloads and checks the pinned toolchain in `recipe/toolkit.json` and unpacks it itself (no PowerShell). The toolchain's own Python then runs `tools/setup_game.py`, which fetches the pinned psxrecomp framework revision, builds the recompiler, and runs `tools/install_game.py`. That generates the native code from the disc, applies the recipes in `tools/` and compiles with `source/runtime-CMakeLists.txt`.
 - **The online game:** a second build of the same sources (`-DRR_NETPLAY=ON`, eight seats, `source/rider_takeover.cpp`) into `runtime-netplay`, with recomp-net and rbengine downloaded at the commits pinned in `recipe/netplay.json`. Its fingerprint is a hash of the release's sources and the game, so players on the same release match and nobody else does.
 - **Speed profile:** `recipe/game.profdata` is an LLVM profile (profile-guided optimisation) recorded from test races in the release build layout: Jail Break, Five-O, Time Trial, Skull-to-Skull, Side Car and the menus. It holds function names, relative source paths and run counts only, with no game code, data or personal paths, and the compiler uses it to lay out the hot code. To record your own, build with `RR_BUILD_PGO=gen`, play, and merge the `.profraw` files with `llvm-profdata merge`.
-- **Reproducible:** the same disc gives every player a byte-identical game exe, wherever it's installed and however many jobs build it (relative compile paths via `tools/relpath_cc.py`, numbered link inputs via `tools/relpath_ld.py`, a fixed compile date, no time stamp, build-ID or symbol table, and no call-graph function sort at link time, which LLD does differently on every link). For 1.1 the game's `runtime\RoadRashNativeResearch.exe` has SHA-256 `F2F403EFEBFEFF3EAA69552256865311B4BB84B312AB16D775877E3DE263FE1C`.
+- **Reproducible:** the same disc gives every player a byte-identical game exe, wherever it's installed and however many jobs build it (relative compile paths via `tools/relpath_cc.py`, numbered link inputs via `tools/relpath_ld.py`, a fixed compile date, no time stamp, build-ID or symbol table, and no call-graph function sort at link time, which LLD does differently on every link). Each release's page lists the SHA-256 of the game's `runtime\RoadRashNativeResearch.exe` (1.1: `F2F403EFEBFEFF3EAA69552256865311B4BB84B312AB16D775877E3DE263FE1C`). `game-build-id.txt` beside the launcher fingerprints the game's sources (`tools/game_build_id.py`): an update that keeps it skips the rebuild.
 - **Build speed:** the big generated units are compiled in pieces of up to 4 MB (`tools/fast_timing.py` split_pieces), with one job per CPU thread as memory allows, and the offline and online games build at the same time. The critical path is one huge game function (about 8 minutes) plus the ThinLTO link.
 
 | Folder | What's in it |
@@ -213,6 +224,10 @@ This repository is the release source: the launcher, the PC adapters that extend
 | `licences/` | LGPL-2.1, psxrecomp's licence, SIL OFL for Roboto Flex, MIT for recomp-net and rbengine |
 
 Never commit game files: disc images, extracted data, generated code, compiled game builds or saves. `.gitignore` blocks the usual ones.
+
+## How this was made
+
+Most of the code in this repository was written by **Claude**, Anthropic's AI model, working in Claude Code. That covers the launcher, the PC adapters, the online play, the installer and the build tools. I directed the project: I chose what to build and how it should look and feel, play-tested every build, and decided what was ready to ship. The recompilation itself runs on the open-source [psxrecomp](https://github.com/RetroPortingToolKit/psxrecomp) framework, and the online play on recomp-net and rbengine, all by their own authors.
 
 ## Legal
 
