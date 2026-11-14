@@ -587,19 +587,22 @@ void rr_ws_tag_text(uint32_t prim, int own, double anchor) {
     t->guard = ws_prepass_packet_guard(words, count);
 }
 static int rr_text_why;   /* last miss: 0 absent, 1 expired, 2 packet changed */
-static const RrTextTag *rr_text_lookup(void) {
+static RrTextTag *rr_text_lookup(void) {
     rr_text_why = 0;
     if (gp0_cmd_source_addr == 0xFFFFFFFFu || gp0_words_needed <= 0 || gp0_words_needed > 12)
         return NULL;
     const uint32_t addr = GPU_RAM_KEY(gp0_cmd_source_addr & 0x1FFFFFFFu), now = (uint32_t)s_frame_count;
     const uint32_t idx = (addr >> 2) & (RR_TEXT_TAGS - 1u);
     for (uint32_t i = 0; i < 8u; i++) {
-        const RrTextTag *t = &rr_text_tags[(idx + i) & (RR_TEXT_TAGS - 1u)];
+        RrTextTag *t = &rr_text_tags[(idx + i) & (RR_TEXT_TAGS - 1u)];
         if (!t->used || t->addr != addr) continue;
         if (t->frame > now || now - t->frame > RR_TEXT_FRESH) { rr_text_why = 1; return NULL; }
         if (!ws_prepass_packet_matches(&t->guard, gp0_cmd_buf, (uint32_t)gp0_words_needed)) {
             rr_text_why = 2; return NULL;
         }
+        /* Still drawn, word for word: the same label. Menus that sit still redraw a label
+         * built once; refreshing here keeps it from expiring (and stretching) after 10 s. */
+        t->frame = now;
         return t;
     }
     return NULL;
@@ -609,9 +612,62 @@ static const RrTextTag *rr_text_lookup(void) {
 # Frontend/results text: the glyph quad narrowed about its label's own anchor,
 # at sub-pixel precision (the exact-HUD override, like the race HUD).
 TEXT_QUAD = r'''
+/* Row memory: the safety net for menu lettering. Each tagged frontend glyph records its line
+ * (top y, palette, texture page), the label's anchor and the x span its glyphs cover. A glyph
+ * quad that finds no tag of its own (the label was rebuilt, recoloured on highlight, moved, or
+ * built by a path that does not tag) takes the anchor of the label it sits in on that line,
+ * seen within the last second, so it never stretches out of its word. */
+#define RR_TEXT_ROWS 128
+#define RR_TEXT_ROW_FRESH 60u
+#define RR_TEXT_ROW_SLACK 24
+typedef struct { uint32_t key, frame; double anchor; int32_t xmin, xmax; } RrTextRow;
+static RrTextRow rr_text_rows[RR_TEXT_ROWS];
+static uint32_t rr_text_row_key(const int32_t vy[4]) {
+    const uint32_t clut = gp0_cmd_buf[2] >> 16, page = (gp0_cmd_buf[4] >> 16) & 0x1FFu;
+    return ((uint32_t)(vy[0] & 0x3FF) << 22) ^ (clut << 6) ^ page ^ 0x80000000u;
+}
+static int rr_text_is_glyph_quad(void) {   /* plain textured quad 0x2C-0x2F: the font's lettering */
+    return gp0_words_needed == 9 && (gp0_cmd_buf[0] >> 26) == 0x0Bu;
+}
+static void rr_text_row_note(const RrTextTag *t, const int32_t vx[4], const int32_t vy[4]) {
+    if (!rr_text_is_glyph_quad()) return;
+    const uint32_t key = rr_text_row_key(vy), now = (uint32_t)s_frame_count;
+    int32_t lo = vx[0], hi = vx[0];
+    for (int i = 1; i < 4; i++) { if (vx[i] < lo) lo = vx[i]; if (vx[i] > hi) hi = vx[i]; }
+    RrTextRow *slot = &rr_text_rows[0];
+    for (int i = 0; i < RR_TEXT_ROWS; i++) {
+        RrTextRow *r = &rr_text_rows[i];
+        if (r->key == key && r->anchor == t->anchor && now - r->frame <= RR_TEXT_ROW_FRESH) {
+            if (r->frame != now) { r->xmin = lo; r->xmax = hi; }   /* a fresh span each frame */
+            else { if (lo < r->xmin) r->xmin = lo; if (hi > r->xmax) r->xmax = hi; }
+            r->frame = now; return;
+        }
+        if (now - r->frame > now - slot->frame) slot = r;
+    }
+    slot->key = key; slot->frame = now; slot->anchor = t->anchor; slot->xmin = lo; slot->xmax = hi;
+}
+static const RrTextRow *rr_text_row_find(const int32_t vx[4], const int32_t vy[4]) {
+    if (!rr_text_is_glyph_quad()) return NULL;
+    const uint32_t key = rr_text_row_key(vy), now = (uint32_t)s_frame_count;
+    const int32_t cx = (vx[0] + vx[1] + vx[2] + vx[3]) / 4;
+    const RrTextRow *best = NULL; int32_t best_d = INT32_MAX;
+    for (int i = 0; i < RR_TEXT_ROWS; i++) {
+        const RrTextRow *r = &rr_text_rows[i];
+        if (r->key != key || r->frame > now || now - r->frame > RR_TEXT_ROW_FRESH) continue;
+        const int32_t d = cx < r->xmin ? r->xmin - cx : cx > r->xmax ? cx - r->xmax : 0;
+        if (d <= RR_TEXT_ROW_SLACK && d < best_d) { best = r; best_d = d; }
+    }
+    return best;
+}
 static int rr_text_quad(int32_t vx[4], const int32_t vy[4]) {
     const RrTextTag *t = rr_text_lookup();
-    rr_text_flag = t != NULL;   /* lettering, in every aspect */
+    double row_anchor = 0.0; int from_row = 0;
+    if (t && t->own && !rr_ui_in_race()) rr_text_row_note(t, vx, vy);
+    if (!t && !rr_ui_in_race() && ws_active()) {
+        const RrTextRow *r = rr_text_row_find(vx, vy);
+        if (r) { row_anchor = r->anchor; from_row = 1; psx_mod_counter_add("rr.ui.text_row_saves", 1); }
+    }
+    rr_text_flag = t != NULL || from_row;   /* lettering, in every aspect */
     {   /* RR_TEXT_TRACE: one line per textured quad lookup (diagnostics) */
         static int on = -1, lines, ylo, yhi;
         static unsigned from;
@@ -623,15 +679,16 @@ static int rr_text_quad(int32_t vx[4], const int32_t vy[4]) {
         }
         if (on && lines < 3000 && (unsigned)s_frame_count >= from && vy[0] >= ylo && vy[0] <= yhi) {
             lines++;
-            fprintf(stderr, "TEXT f=%u src=%08X xy=%d,%d tag=%d own=%d a=%.1f why=%d w0=%08X\n", (unsigned)s_frame_count,
-                    gp0_cmd_source_addr, vx[0], vy[0], t != NULL, t ? t->own : -1, t ? t->anchor : 0.0,
-                    rr_text_why, gp0_cmd_buf[0]);
+            fprintf(stderr, "TEXT f=%u src=%08X xy=%d,%d tag=%d own=%d a=%.1f why=%d row=%d w0=%08X\n", (unsigned)s_frame_count,
+                    gp0_cmd_source_addr, vx[0], vy[0], t != NULL, t ? t->own : -1, t ? t->anchor : row_anchor,
+                    rr_text_why, from_row, gp0_cmd_buf[0]);
         }
     }
-    if (!t || !t->own || rr_ui_in_race() || !ws_active()) return 0;
+    if (!from_row && (!t || !t->own || rr_ui_in_race() || !ws_active())) return 0;
+    const double anchor = from_row ? row_anchor : t->anchor;
     rr_hx_begin(0);
     for (int i = 0; i < 4; i++) {
-        const double ex = t->anchor + (double)(vx[i] - t->anchor) * ws_xnum / ws_xden;
+        const double ex = anchor + (double)(vx[i] - anchor) * ws_xnum / ws_xden;
         rr_hx_add(vx[i], vy[i], ex, vy[i]);
         vx[i] = (int32_t)floor(ex + 0.5);
     }
