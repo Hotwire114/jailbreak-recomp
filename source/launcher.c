@@ -622,14 +622,17 @@ static int resolve_cue(wchar_t *path){
     char *first=strstr(bytes,"FILE \"");if(!first)return fail("This .cue doesn't name a .bin file. Pick the .bin file directly.");first+=6;char*last=strchr(first,'\"');if(!last||last-first>2000)return fail("This .cue's .bin file name couldn't be read. Pick the .bin file directly.");*last=0;wchar_t name[2048];if(!MultiByteToWideChar(CP_UTF8,0,first,-1,name,2048))return 0;
     PathRemoveFileSpecW(path);wcscat(path,L"\\");wcscat(path,name);return 1;
 }
+static int folder_space_check(void);   /* launcher_folder.h */
 static void import_disc(void){
     if(busy)return;wchar_t chosen[32768]={0};OPENFILENAMEW dialog={0};dialog.lStructSize=sizeof(dialog);dialog.hwndOwner=mainwindow;dialog.lpstrFilter=L"Road Rash game disc (*.bin;*.iso;*.cue)\0*.bin;*.iso;*.cue\0";dialog.lpstrFile=chosen;dialog.nMaxFile=32768;dialog.lpstrTitle=L"Import your original Road Rash: Jailbreak (USA)";dialog.Flags=OFN_FILEMUSTEXIST|OFN_PATHMUSTEXIST|OFN_NOCHANGEDIR;
+    if(!folder_space_check())return;   /* launcher_folder.h: too little space for a first install */
     if(!GetOpenFileNameW(&dialog))return;
     if(!resolve_cue(chosen)){wchar_t err[256];MultiByteToWideChar(CP_UTF8,0,error_text,-1,err,256);MessageBoxW(mainwindow,err,L"Game import",MB_ICONWARNING);return;}
     busy=1;progress=0;notice(L"INSTALLING YOUR GAME DATA \u2014 YOU ONLY NEED TO IMPORT ONCE");
     wchar_t *copy=_wcsdup(chosen);uintptr_t thread=_beginthreadex(NULL,0,import_worker,copy,0,NULL);if(!thread){free(copy);busy=0;notice(L"Could not start the game import.");}else CloseHandle((HANDLE)thread);
 }
 #include "launcher_update.h"
+#include "launcher_folder.h"
 #include "launcher_skin.h"
 
 /* Per-monitor DPI awareness where available (Windows 10 1703+), otherwise
@@ -867,7 +870,7 @@ static void native_action(void){
         else if(selected==13)scanline_mode=(scanline_mode+1)%rr_scanline_steps;else if(selected==14)draw_mode=(draw_mode+1)%rr_draw_steps;
         else if(selected>=16&&selected<20)post_fx[selected-16]=(post_fx[selected-16]+1)%rr_post_steps;else if(selected==20)shadow_mode=(shadow_mode+1)%rr_shadow_steps;save_settings();}
     if(page==3){if(selected==0)import_mod();else if(selected==1){wchar_t path[32768];join(path,store,L"mods");ensure(path);ShellExecuteW(mainwindow,L"open",path,NULL,NULL,SW_SHOWNORMAL);}else if(selected==2)run_mod(L"dump",NULL);else if(selected-3<mod_count)run_mod(L"toggle",mod_ids[selected-3]);}
-    if(page==4){if(selected==0)import_disc();else if(selected==1)ShellExecuteW(mainwindow,L"open",store,NULL,NULL,SW_SHOWNORMAL);else if(selected==2)run_setup_again();else if(selected==3)report_problem();else if(selected==4){if(update_version[0])update_install();else update_check(1);}}
+    if(page==4){if(selected==0)import_disc();else if(selected==1)ShellExecuteW(mainwindow,L"open",store,NULL,NULL,SW_SHOWNORMAL);else if(selected==2)run_setup_again();else if(selected==3)report_problem();else if(selected==4){if(update_version[0])update_install();else update_check(1);}else if(selected==5)folder_change(1);}
     if(page==6){if(selected==0){rename_riders=!rename_riders;save_settings();}else edit_rider_name(selected-1);}
     InvalidateRect(mainwindow,NULL,FALSE);
 }
@@ -934,7 +937,7 @@ static LRESULT CALLBACK proc(HWND window,UINT msg,WPARAM wp,LPARAM lp){
             /* install_game.py's compile progress: a second line "progress=<0-100>" (no line: the moving bar). */
             if(n){char*p=strstr(line,"\nprogress=");build_percent=busy==2&&p?atoi(p+10):-1;line[strcspn(line,"\r\n")]=0;MultiByteToWideChar(CP_UTF8,0,line,-1,status_text,256);}}
             const wchar_t*av=setup_antivirus_note();if(av&&wcsncmp(status_text,L"SETUP FAILED",12))wcscpy(status_text,av);}
-        update_poll();
+        update_poll();folder_poll();
         if(builder){DWORD code;if(builder_exit(&code)&&code!=STILL_ACTIVE){int was_mod=busy==3,was_original=busy==4;CloseHandle(builder);builder=NULL;busy=0;
             if(was_mod||was_original){
                 if(was_mod)mod_reload();
@@ -1000,6 +1003,7 @@ static LRESULT CALLBACK proc(HWND window,UINT msg,WPARAM wp,LPARAM lp){
     if(msg==WM_LBUTTONDOWN){
         int row,hit=mouse_hit(lp,&row);
         if(hit==HIT_FIND)action();
+        if(hit==HIT_FOLDER)folder_change(2);   /* first run: choose the game folder, then find the game */
         else if(binding>=0){if(hit!=HIT_ROW||row!=selected)binding=-1;}
         else if(hit==HIT_ROW){selected=row;action();}
         else if(hit==HIT_BACK)go_back();
@@ -1030,12 +1034,12 @@ static int validate_mdec_file(const wchar_t*path){
 int WINAPI wWinMain(HINSTANCE instance,HINSTANCE previous,PWSTR line,int show){
     (void)previous;(void)line;dpi_setup();GetModuleFileNameW(NULL,appdir,32768);PathRemoveFileSpecW(appdir);
     workspace[0]=0;
-    wchar_t base[32768];GetEnvironmentVariableW(L"LOCALAPPDATA",base,32768);join(store,base,L"RoadRashJailbreak");
-    int argc;wchar_t **argv=CommandLineToArgvW(GetCommandLineW(),&argc);const wchar_t *preview_path=NULL,*import_path=NULL,*mod_operation=NULL,*mod_value=NULL;int room_test=0,room_test_n=0;const wchar_t*room_test_code=NULL;int settings_only=0,play_on_start=0,setup_on_start=0,preview_voice=0,net_test=0,net_test_port=0,online_start_on=0,second_instance=0,show_launcher=0;const wchar_t*net_test_address=NULL;
+    wchar_t base[32768];GetEnvironmentVariableW(L"LOCALAPPDATA",base,32768);join(store,base,L"RoadRashJailbreak");wcscpy(default_store,store);
+    int argc;wchar_t **argv=CommandLineToArgvW(GetCommandLineW(),&argc);const wchar_t *preview_path=NULL,*import_path=NULL,*mod_operation=NULL,*mod_value=NULL;int room_test=0,room_test_n=0;const wchar_t*room_test_code=NULL;int find_game=0,settings_only=0,play_on_start=0,setup_on_start=0,preview_voice=0,net_test=0,net_test_port=0,online_start_on=0,second_instance=0,show_launcher=0;const wchar_t*net_test_address=NULL;
     for(int i=1;i<argc;i++){
         if(!wcscmp(argv[i],L"--self-test")){LocalFree(argv);return decoder_test();}
         if(!wcscmp(argv[i],L"--validate-mdec-file")&&i+1<argc){int code=validate_mdec_file(argv[++i]);LocalFree(argv);return code;}
-        if(!wcscmp(argv[i],L"--data-root")&&i+1<argc)GetFullPathNameW(argv[++i],32768,store,NULL);
+        if(!wcscmp(argv[i],L"--data-root")&&i+1<argc){GetFullPathNameW(argv[++i],32768,store,NULL);data_root_given=1;}
         else if(!wcscmp(argv[i],L"--workspace")&&i+1<argc)GetFullPathNameW(argv[++i],32768,workspace,NULL);
         else if(!wcscmp(argv[i],L"--render-preview")&&i+1<argc){preview_path=argv[++i];preview_only=1;}
         else if(!wcscmp(argv[i],L"--preview-size")&&i+1<argc){int w=0,h=0;if(swscanf(argv[++i],L"%dx%d",&w,&h)!=2||w<320||h<180||w>7680||h>4320){LocalFree(argv);return 22;}render_width=w;render_height=h;}
@@ -1064,8 +1068,10 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE previous,PWSTR line,int show){
         /* Test: Play online rooms without clicking (lobby_page.h). */
         else if(!wcscmp(argv[i],L"--room-host")&&i+1<argc){room_test=1;room_test_n=_wtoi(argv[++i]);}
         else if(!wcscmp(argv[i],L"--room-join")&&i+1<argc){room_test=2;room_test_code=argv[++i];}
+        else if(!wcscmp(argv[i],L"--find-game"))find_game=1;   /* after a game-folder change at the first import */
         else if(!wcscmp(argv[i],L"--launcher"))show_launcher=1;   /* always show the launcher (overrides Start-up: Straight to game) */
     }
+    if(!data_root_given)folder_load();   /* install-location.txt (launcher_folder.h) */
     page=page_live(page);ensure(store);join(ini,store,L"launcher.ini");join(discfile,store,L"game-disc.bin");join(cuefile,store,L"installed-disc.cue");settings();
     if(selected<0||selected>=row_count())selected=0;   /* after settings(): the rows come from tuning.ini */
     if(import_path){wchar_t source[32768];GetFullPathNameW(import_path,32768,source,NULL);if(!resolve_cue(source)||!validate_disc(source)||!CopyFileW(source,discfile,FALSE)){fprintf(stderr,"%s\n",error_text);LocalFree(argv);return 10;}}
@@ -1093,6 +1099,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE previous,PWSTR line,int show){
     {uintptr_t t=_beginthreadex(NULL,0,update_cleanup_worker,NULL,0,NULL);if(t)CloseHandle((HANDLE)t);}update_check_daily();   /* launcher_update.h */
     if(installed&&!preset_chosen&&!play_on_start&&page==0)open_page(SETUP_PAGE);   /* first run: choose a preset */
     if(setup_on_start&&installed)build_game();
+    if(find_game&&!installed)import_disc();
     if(play_on_start)play_game();
     if(online_start_on){if(net_test_port>=1024&&net_test_port<=65534)online_port=net_test_port;if(net_test_address)wcsncpy(online_address,net_test_address,63);page=ONLINE_PAGE;selected=online_start_on-1;online_start(online_start_on-1);}
     if(room_test){if(net_test_port>=1024&&net_test_port<=65534)online_port=net_test_port;page=LB_ROOMS_PAGE;selected=0;

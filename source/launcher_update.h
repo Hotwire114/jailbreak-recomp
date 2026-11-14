@@ -14,13 +14,15 @@
  * <name>.old-update (Windows allows renaming the running launcher) and the new file put
  * in its place. The new launcher starts and the old files are deleted on its next start.
  * launcher.ini [update] check=0 turns the automatic check off; the button still works. */
-#define RR_VERSION "1.2"
+#define RR_VERSION "1.2.1"
 #define RR_UPDATE_API "https://api.github.com/repos/Hotwire114/jailbreak-recomp/releases/latest"
 #define RR_UPDATE_PAGE L"https://github.com/Hotwire114/jailbreak-recomp/releases/latest"
 
 static char update_url[1024],update_sha[65];static unsigned long long update_size;
 static volatile LONG update_checking;static int update_manual;
 static HANDLE update_thread;
+static int update_preconfirmed;   /* the pop-up already asked: update_install skips its own question */
+static void update_install(void);
 static int setup_clean;   /* build_game: clear the old build folders first (Run setup again) */
 
 static int version_newer(const char*a,const char*b){int x[3]={0},y[3]={0};sscanf(a,"%d.%d.%d",x,x+1,x+2);sscanf(b,"%d.%d.%d",y,y+1,y+2);
@@ -70,7 +72,15 @@ static void update_check_daily(void){
 /* WM_APP+3: r = query result + 1. */
 static void update_checked(int r){
     update_checking=0;
-    if(r==2){wchar_t t[160];swprintf(t,160,L"VERSION %ls IS AVAILABLE — GAME INSTALLATION > UPDATE TO %ls",update_version,update_version);if(!busy||update_manual)notice(t);}
+    if(r==2){wchar_t t[160];swprintf(t,160,L"VERSION %ls IS AVAILABLE — GAME INSTALLATION > UPDATE TO %ls",update_version,update_version);if(!busy||update_manual)notice(t);
+        /* A pop-up, when the launcher is on screen and free (not while setup, a mod check or
+         * "Straight to game" runs): Yes updates now, No leaves it for Game installation. */
+        if(!busy&&!quick_start&&IsWindowVisible(mainwindow)){wchar_t m[700];
+            swprintf(m,700,L"Jailbreak Recomp %ls is out (you have %hs).\n\nUpdate now? The launcher downloads it from GitHub (%llu MB), checks it and restarts.\nYour saves, settings and installed game are kept. If the game itself changed, it rebuilds once when you next press Play.\n\nNo: you can update later from Game installation > Update to version %ls.",
+                update_version,RR_VERSION,(update_size+(1<<20)-1)>>20,update_version);
+            update_manual=0;InvalidateRect(mainwindow,NULL,FALSE);
+            if(MessageBoxW(mainwindow,m,L"Update available",MB_YESNO|MB_ICONINFORMATION)==IDYES){update_preconfirmed=1;update_install();update_preconfirmed=0;}
+            return;}}
     else if(update_manual){wchar_t t[160];if(r==1)swprintf(t,160,L"YOU HAVE THE LATEST VERSION (%hs)",RR_VERSION);else wcscpy(t,L"Could not reach GitHub to check for updates. Check your internet connection.");notice(t);}
     update_manual=0;InvalidateRect(mainwindow,NULL,FALSE);
 }
@@ -124,7 +134,7 @@ static void update_install(void){
     if(h==INVALID_HANDLE_VALUE){MessageBoxW(mainwindow,L"The launcher's folder can't be changed from here (for example, it is in Program Files).\nThe releases page opens instead: download the new version and extract it over this folder.",L"Update",MB_ICONINFORMATION);ShellExecuteW(mainwindow,L"open",RR_UPDATE_PAGE,NULL,NULL,SW_SHOWNORMAL);return;}
     CloseHandle(h);
     wchar_t text[600];swprintf(text,600,L"Update to version %ls?\n\nThe launcher downloads it from GitHub (%llu MB), checks it and restarts.\nYour saves, settings and installed game are kept. If the game itself changed, it rebuilds once when you next press Play.",update_version,(update_size+(1<<20)-1)>>20);
-    if(MessageBoxW(mainwindow,text,L"Update",MB_YESNO|MB_ICONQUESTION)!=IDYES)return;
+    if(!update_preconfirmed&&MessageBoxW(mainwindow,text,L"Update",MB_YESNO|MB_ICONQUESTION)!=IDYES)return;
     uintptr_t t=_beginthreadex(NULL,0,update_install_worker,NULL,0,NULL);if(!t){notice(L"The update could not start.");return;}
     update_thread=(HANDLE)t;busy=5;wchar_t s[120];swprintf(s,120,L"DOWNLOADING VERSION %ls…",update_version);notice(s);
 }
