@@ -173,6 +173,11 @@ if(RR_TEXTURE_CORRECTION_FULL)
     --split "${CMAKE_CURRENT_BINARY_DIR}/fast-src" ${_generated}
     OUTPUT_VARIABLE _generated OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
   target_compile_definitions(rr-game PRIVATE RR_PGXP_SPLIT=1)
+else()
+  # No vertex-path copies, but big units are still compiled in pieces (build time).
+  execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/fast_timing.py"
+    --pieces "${CMAKE_CURRENT_BINARY_DIR}/fast-src" ${_generated}
+    OUTPUT_VARIABLE _generated OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
 endif()
 add_library(rr-fast-gen OBJECT ${_generated})
 target_include_directories(rr-fast-gen BEFORE PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/fast-include")

@@ -169,7 +169,7 @@ static const TnItem tn_items[]={
  {"installed_mods",3,3,-1,TN_GROUP|TN_FIXED,"Installed mods","Each installed mod: Enter or click switches it on or off.\nDel or the X button removes it (moved to mods\\removed)."},
  {"reimport",4,0,-1,0,"Repair / re-import game","Re-import your .bin (or .cue / .iso) to repair the installed game data."},
  {"open_folder",4,1,-1,0,"Open installation folder","Open the folder that holds your installed game, local build and saves."},
- {"prepare_build",4,2,-1,0,"Prepare local game build","Rebuild the local native game from your installed data.\nThis can take a few minutes."},
+ {"prepare_build",4,2,-1,0,"Run setup again","If the game will not start or setup went wrong: rebuild it from scratch from your installed game (15-25 minutes).\nSaves and settings are kept."},
  {"report",4,3,-1,0,"Report a problem","Save a bug report: a picture of this screen, the game's recent logs and your settings, with a short note.\nIt goes into the reports folder of your installation."},
  {"custom_names",6,0,-1,0,"Custom names","Custom names appear in supported race HUD labels. Characters and saved profiles stay unchanged."},
  {"name1",6,1,-1,0,"Player 1 name","Type a name of up to 8 characters.\nSaved on this PC."},
@@ -235,7 +235,9 @@ static const TnItem tn_items[]={
  {"online_status",18,5,-1,0,"Status","Whether this build can play online."},
  {"setup_recommended",16,0,-1,TN_FIXED,"Recommended","1080p, 16:9, 60 FPS, HD menus and more detailed riders. Runs well on most PCs.\nChange it later in Options > Display."},
  {"setup_classic",16,1,-1,TN_FIXED,"Classic look","The PS1's look: 4:3, its own frame rate and menus, drawn sharp. Saves and achievements still work.\nChange it later in Options > Display."},
- {"setup_high",16,2,-1,TN_FIXED,"High end","1440p, 16:9, 120 FPS, supersampling and the most detailed riders. Needs a fast PC and a 120 Hz display.\nChange it later in Options > Display."}};
+ {"setup_high",16,2,-1,TN_FIXED,"High end","1440p, 16:9, 120 FPS, supersampling and the most detailed riders. Needs a fast PC and a 120 Hz display.\nChange it later in Options > Display."},
+ /* 1.2: last in the table, so files written before it place it after Report a problem. */
+ {"updates",4,4,-1,0,"Check for updates","Look for a new version on GitHub (the launcher also checks once a day).\nUpdates keep your saves, settings and installed game."}};
 #define TN_ITEMS ((int)(sizeof tn_items/sizeof tn_items[0]))
 #define TN_ROWS 32
 /* Items shown by default on another page than their native one: the Display
@@ -459,7 +461,10 @@ TN_FN void tn_resolve(RrTuning*t,TniFile*f,TniLog*log){
             int i=tn_item_id(id);if(i<0)tni_log(log,"line %d: [launcher menu] hidden: there is no item called \"%s\"",h->line,id);else t->hidden[i]=1;}}
     tn_fix_layout(t,log);
     for(int p=0;p<TN_PAGES;p++)tn_text(t->title[p],TN_TITLE,0,f,"launcher titles",tn_pages[p].id,log);
-    for(int i=0;i<TN_ITEMS;i++){tn_text(t->label[i],TN_LABEL,0,f,"launcher labels",tn_items[i].id,log);tn_text(t->help[i],TN_HELP,1,f,"launcher help",tn_items[i].id,log);}
+    for(int i=0;i<TN_ITEMS;i++){tn_text(t->label[i],TN_LABEL,0,f,"launcher labels",tn_items[i].id,log);tn_text(t->help[i],TN_HELP,1,f,"launcher help",tn_items[i].id,log);
+        /* 1.2 renamed "Prepare local game build": a file holding the old built-in text gets the new. */
+        if(!strcmp(tn_items[i].id,"prepare_build")){if(!strcmp(t->label[i],"Prepare local game build"))tn_copy(t->label[i],TN_LABEL,tn_items[i].label);
+            if(!strncmp(t->help[i],"Rebuild the local native game from your installed data.",56))tn_copy(t->help[i],TN_HELP,tn_items[i].help);}}
     /* Level of detail. */
     TniEntry*e=tni_find(f,"level of detail","steps");
     if(e){int v[TN_LOD_MAX],n=tn_ints(e->val,v,TN_LOD_MAX),ok=n>=2;const char*why="it needs 2 to 12 numbers separated by commas";

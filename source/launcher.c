@@ -22,6 +22,8 @@
 static wchar_t appdir[32768],store[32768],ini[32768],discfile[32768],cuefile[32768],workspace[32768];
 static HWND mainwindow;static Image project_logo;static int installed,page,selected,binding=-1,resolution=1,device,filter;
 static volatile LONG busy,progress;static HANDLE builder,game_process;static int gamepad_map;
+static wchar_t update_version[16];   /* a newer release on GitHub (launcher_update.h), or empty */
+static int build_percent=-1;   /* the local build's progress, from build-status.txt (-1: not known) */
 /* Player 2 seat: 0 off, 1 controller, 2 keyboard. Keyboard only when Player 1
  * is on a controller (one keyboard map per seat would collide otherwise). With
  * Player 1 on a controller too, the runtime gives Player 2 the next free pad. */
@@ -510,9 +512,11 @@ static void remove_tree(const wchar_t*dir_in){
     RemoveDirectoryW(dir);
 }
 /* First-run bootstrap (the toolchain, when its Python is not there yet), then setup_game.py. */
+static void setup_clear_old_build(void);static void first_start_note(void);static const wchar_t*setup_antivirus_note(void);
 static unsigned __stdcall setup_worker(void*arg){
     (void)arg;wchar_t python[32768],path[32768];toolkit_python(python);
     join(path,store,L"setup.log");FILE*lf=_wfopen(path,L"wb");if(lf)fclose(lf);
+    setup_clear_old_build();   /* Run setup again (launcher_update.h) */
     if(!exists(python)){
         if(workspace[0]){setup_status("SETUP FAILED: the selected toolkit has no portable Python.");return 1;}
         char json[8192]={0},file[128],url[1024],size[32],sha[80];join(path,appdir,L"recipe\\toolkit.json");FILE*f=_wfopen(path,L"rb");if(f){fread(json,1,sizeof json-1,f);fclose(f);}
@@ -551,7 +555,7 @@ static void prepare_original(void){
 static void build_game(void){
     wchar_t status[32768];join(status,store,L"build-status.txt");DeleteFileW(status);
     uintptr_t t=_beginthreadex(NULL,0,setup_worker,NULL,0,NULL);if(!t){notice(L"Local build tools are unavailable. See the setup guide.");return;}
-    builder=(HANDLE)t;builder_thread=1;busy=2;notice(L"PREPARING YOUR LOCAL NATIVE BUILD \u2014 THIS MAY TAKE A FEW MINUTES");
+    builder=(HANDLE)t;builder_thread=1;busy=2;build_percent=-1;notice(L"PREPARING YOUR LOCAL NATIVE BUILD \u2014 THIS MAY TAKE A FEW MINUTES");
 }
 static void run_mod(const wchar_t*operation,const wchar_t*value){
     if(busy)return;
@@ -583,7 +587,13 @@ static void play_game_now(void){
     wchar_t exe[32768],cwd[32768],config[32768],saves[32768],cmd[65536];join(cwd,store,L"runtime");join(exe,cwd,L"RoadRashNativeResearch.exe");
     wchar_t receipt[32768];join(receipt,store,L"local-build.json");
     if(!exists(exe)||!exists(receipt)){build_game();return;}
-    if(enhanced_mode){FILE*f=_wfopen(receipt,L"rb");char data[4096]={0};if(f){fread(data,1,sizeof(data)-1,f);fclose(f);}if(!strstr(data,"rr-pc-1.1")){build_game();return;}}   /* a game built by an older release: rebuild (1.1 adds the online game) */
+    /* Rebuild only when the game itself changed: game-build-id.txt beside the launcher
+     * (tools/game_build_id.py, written by the packager) against the ID in the receipt. A
+     * launcher-only update keeps the ID and starts at once. A package without the file
+     * (a developer tree) falls back to the release marker. */
+    if(enhanced_mode){FILE*f=_wfopen(receipt,L"rb");char data[4096]={0};if(f){fread(data,1,sizeof(data)-1,f);fclose(f);}
+        wchar_t idfile[32768];join(idfile,appdir,L"game-build-id.txt");char id[80]={0};FILE*g=_wfopen(idfile,L"rb");if(g){fread(id,1,64,g);fclose(g);id[64]=0;}
+        if(strlen(id)==64?!strstr(data,id):!strstr(data,"rr-pc-1.2")){build_game();return;}}
     if(!mod_checked){play_after_mod_check=1;if(enhanced_mode)run_mod(L"sync",NULL);else prepare_original();online_launch=online&&play_after_mod_check;return;}mod_checked=0;
     online_launch=online;
     join(cwd,store,online?online_runtime:enhanced_mode?L"runtime":L"runtime-original");join(exe,cwd,L"RoadRashNativeResearch.exe");if(!write_runtime_settings()){online_launch=0;notice(L"Game settings could not be written. Check your installation folder and free disk space.");return;}join(config,store,enhanced_mode?L"game.toml":L"game-original.toml");join(saves,store,L"saves");
@@ -594,6 +604,7 @@ static void play_game_now(void){
     if(started){if(online_launch)ol_detach();else ol_attach(GetProcessId(game_process));game_was_online=online_launch;}   /* Online from the game's menus; ratings after an online game */
     if(started&&quick_start)quick_start=2;
     if(started)notice(online_launch?L"ONLINE GAME RUNNING \u2014 CLOSE ITS WINDOW TO RETURN HERE":enhanced_mode?L"ENHANCED GAME RUNNING \u2014 CLOSE ITS WINDOW TO RETURN HERE":L"ORIGINAL GAME RUNNING \u2014 CLOSE ITS WINDOW TO RETURN HERE");else notice(L"The local game build could not start. See the setup guide.");
+    if(started&&!online_launch&&enhanced_mode)first_start_note();   /* antivirus may hold a new build's first start */
     online_launch=0;room_slots=0;
 }
 static DWORD CALLBACK copy_progress(LARGE_INTEGER total,LARGE_INTEGER done,LARGE_INTEGER stream,LARGE_INTEGER streamdone,DWORD number,DWORD reason,HANDLE src,HANDLE dst,LPVOID context){(void)stream;(void)streamdone;(void)number;(void)reason;(void)src;(void)dst;(void)context;if(total.QuadPart)InterlockedExchange(&progress,(LONG)(done.QuadPart*100/total.QuadPart));return PROGRESS_CONTINUE;}
@@ -618,6 +629,7 @@ static void import_disc(void){
     busy=1;progress=0;notice(L"INSTALLING YOUR GAME DATA \u2014 YOU ONLY NEED TO IMPORT ONCE");
     wchar_t *copy=_wcsdup(chosen);uintptr_t thread=_beginthreadex(NULL,0,import_worker,copy,0,NULL);if(!thread){free(copy);busy=0;notice(L"Could not start the game import.");}else CloseHandle((HANDLE)thread);
 }
+#include "launcher_update.h"
 #include "launcher_skin.h"
 
 /* Per-monitor DPI awareness where available (Windows 10 1703+), otherwise
@@ -855,7 +867,7 @@ static void native_action(void){
         else if(selected==13)scanline_mode=(scanline_mode+1)%rr_scanline_steps;else if(selected==14)draw_mode=(draw_mode+1)%rr_draw_steps;
         else if(selected>=16&&selected<20)post_fx[selected-16]=(post_fx[selected-16]+1)%rr_post_steps;else if(selected==20)shadow_mode=(shadow_mode+1)%rr_shadow_steps;save_settings();}
     if(page==3){if(selected==0)import_mod();else if(selected==1){wchar_t path[32768];join(path,store,L"mods");ensure(path);ShellExecuteW(mainwindow,L"open",path,NULL,NULL,SW_SHOWNORMAL);}else if(selected==2)run_mod(L"dump",NULL);else if(selected-3<mod_count)run_mod(L"toggle",mod_ids[selected-3]);}
-    if(page==4){if(selected==0)import_disc();else if(selected==1)ShellExecuteW(mainwindow,L"open",store,NULL,NULL,SW_SHOWNORMAL);else if(selected==3)report_problem();else if(installed)build_game();else notice(L"Import your original game first.");}
+    if(page==4){if(selected==0)import_disc();else if(selected==1)ShellExecuteW(mainwindow,L"open",store,NULL,NULL,SW_SHOWNORMAL);else if(selected==2)run_setup_again();else if(selected==3)report_problem();else if(selected==4){if(update_version[0])update_install();else update_check(1);}}
     if(page==6){if(selected==0){rename_riders=!rename_riders;save_settings();}else edit_rider_name(selected-1);}
     InvalidateRect(mainwindow,NULL,FALSE);
 }
@@ -918,7 +930,11 @@ static LRESULT CALLBACK proc(HWND window,UINT msg,WPARAM wp,LPARAM lp){
     if(msg==WM_ERASEBKGND)return 1;
     if(msg==WM_TIMER&&wp==2){sb_pad_poll(window);lb_poll(window);ol_poll();if(busy)InvalidateRect(window,NULL,FALSE);return 0;}
     if(msg==WM_TIMER){
-        if(builder){wchar_t path[32768];join(path,store,busy==3?L"mods\\status.txt":busy==4?L"launch-status.txt":L"build-status.txt");FILE*f=_wfopen(path,L"rb");if(f){char line[1024]={0};size_t n=fread(line,1,sizeof(line)-1,f);fclose(f);if(n)MultiByteToWideChar(CP_UTF8,0,line,-1,status_text,256);}}
+        if(builder){wchar_t path[32768];join(path,store,busy==3?L"mods\\status.txt":busy==4?L"launch-status.txt":L"build-status.txt");FILE*f=_wfopen(path,L"rb");if(f){char line[1024]={0};size_t n=fread(line,1,sizeof(line)-1,f);fclose(f);
+            /* install_game.py's compile progress: a second line "progress=<0-100>" (no line: the moving bar). */
+            if(n){char*p=strstr(line,"\nprogress=");build_percent=busy==2&&p?atoi(p+10):-1;line[strcspn(line,"\r\n")]=0;MultiByteToWideChar(CP_UTF8,0,line,-1,status_text,256);}}
+            const wchar_t*av=setup_antivirus_note();if(av&&wcsncmp(status_text,L"SETUP FAILED",12))wcscpy(status_text,av);}
+        update_poll();
         if(builder){DWORD code;if(builder_exit(&code)&&code!=STILL_ACTIVE){int was_mod=busy==3,was_original=busy==4;CloseHandle(builder);builder=NULL;busy=0;
             if(was_mod||was_original){
                 if(was_mod)mod_reload();
@@ -926,7 +942,11 @@ static LRESULT CALLBACK proc(HWND window,UINT msg,WPARAM wp,LPARAM lp){
                     notice(was_original?L"Original mode could not be prepared. See launch.log for details.":reason[0]?reason:L"The mod was not applied. See mods.log for details.");play_after_mod_check=0;online_launch=0;original_done();}
                 else if(play_after_mod_check){play_after_mod_check=0;mod_checked=1;play_game();}
                 else notice(L"MODS UPDATED \u2014 CHANGES APPLY ON YOUR NEXT ENHANCED LAUNCH");
-            }else notice(code?L"Local build setup needs attention. Open the installation folder and read build.log.":L"LOCAL GAME BUILD READY \u2014 SELECT PLAY");}}
+            }else if(code){   /* setup_game.py: "SETUP FAILED: <what to do>" in build-status.txt */
+                wchar_t path[32768],reason[400]=L"Setup could not finish. Choose Game installation > Run setup again.";join(path,store,L"build-status.txt");FILE*f=_wfopen(path,L"rb");
+                if(f){char line[1024]={0};size_t n=fread(line,1,sizeof(line)-1,f);fclose(f);line[strcspn(line,"\r\n")]=0;if(n&&!strncmp(line,"SETUP FAILED: ",14))MultiByteToWideChar(CP_UTF8,0,line+14,-1,reason,400);}
+                notice(reason);wchar_t box[600];swprintf(box,600,L"%ls\n\nThe details are in build.log, in the installation folder (Game installation > Open installation folder).",reason);MessageBoxW(mainwindow,box,L"Setup",MB_ICONWARNING);}
+            else notice(L"LOCAL GAME BUILD READY \u2014 SELECT PLAY");}}
         /* Straight-to-game: a launch that didn't happen shows the launcher with its reason. */
         if(quick_start==1&&!busy&&!play_after_mod_check&&!game_process)quick_reveal();
         if(game_process){DWORD code;if(GetExitCodeProcess(game_process,&code)&&code!=STILL_ACTIVE){CloseHandle(game_process);game_process=NULL;
@@ -937,6 +957,7 @@ static LRESULT CALLBACK proc(HWND window,UINT msg,WPARAM wp,LPARAM lp){
         {FILETIME s=file_stamp(tuning_path);if(CompareFileTime(&s,&tuning_stamp)){tuning_load(1);InvalidateRect(window,NULL,FALSE);}}
         if(busy||toast_visible()!=toast_painted)InvalidateRect(window,NULL,FALSE);return 0;
     }
+    if(msg==WM_APP+3){update_checked((int)wp);return 0;}
     if(msg==WM_APP+2){online_ready_to_play((int)wp,(int)lp);InvalidateRect(window,NULL,FALSE);return 0;}
     if(msg==WM_APP+1){busy=0;if(wp){installed=1;artwork();page=selected=list_first=nav_depth=0;binding=-1;notice(L"GAME DATA INSTALLED \u2014 THE ORIGINAL DISC FILE IS NO LONGER REQUIRED");if(!preset_chosen)open_page(SETUP_PAGE);if(!preview_only)build_game();}else{wchar_t err[256];MultiByteToWideChar(CP_UTF8,0,error_text,-1,err,256);const wchar_t*why=err[0]?err:L"Game import failed. Your previous installation was preserved.";notice(why);MessageBoxW(mainwindow,why,L"Game import",MB_ICONWARNING);}return 0;}
     if(msg==WM_CHAR&&installed&&binding<0&&lb_chat_char(wp)){InvalidateRect(window,NULL,FALSE);return 0;}
@@ -1069,6 +1090,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE previous,PWSTR line,int show){
      if(start_game_directly&&installed&&preset_chosen&&exists(built)&&!show_launcher&&!(GetAsyncKeyState(VK_SHIFT)&0x8000)&&!play_on_start&&!setup_on_start&&!online_start_on&&!room_test&&page==0)quick_start=1;}
     place_main_window();SetTimer(mainwindow,1,500,NULL);SetTimer(mainwindow,2,50,NULL);if(!quick_start){ShowWindow(mainwindow,show);UpdateWindow(mainwindow);}
     if(quick_start)play_game();
+    {uintptr_t t=_beginthreadex(NULL,0,update_cleanup_worker,NULL,0,NULL);if(t)CloseHandle((HANDLE)t);}update_check_daily();   /* launcher_update.h */
     if(installed&&!preset_chosen&&!play_on_start&&page==0)open_page(SETUP_PAGE);   /* first run: choose a preset */
     if(setup_on_start&&installed)build_game();
     if(play_on_start)play_game();
