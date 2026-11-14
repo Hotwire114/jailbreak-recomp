@@ -119,6 +119,15 @@ def record_trim(source):
         '    s_rr_rec_off_pq = 0;\n'
         '    glb_set_perspective_triangle(en, q0, q1, q2);\n',
         'Perspective triangle direct path')
+    # Graphics worker (gpu_geometry.py gpu_worker): a sync point hit on the worker thread
+    # (rt_acquire) makes the GL context current THERE, and the frame boundary's release
+    # runs on the emulation thread, so the context stayed on the worker and the render
+    # thread waited for it for ever (boot hang). The worker hands it back itself before
+    # it reports its queue empty.
+    sub('int gl_renderer_render_thread_active(void) { return s_rth_on; }\n',
+        'int gl_renderer_render_thread_active(void) { return s_rth_on; }\n'
+        'void gl_renderer_worker_release(void) { if (s_rth_on && rt_held()) gl_rth_release(); }\n',
+        'Worker context release')
     return source
 
 # Traced lettering (HD UI text mode 6). native_ui.cpp rr_text_sdf_build traces

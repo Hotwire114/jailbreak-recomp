@@ -614,12 +614,14 @@ static int rr_text_quad(int32_t vx[4], const int32_t vy[4]) {
     rr_text_flag = t != NULL;   /* lettering, in every aspect */
     {   /* RR_TEXT_TRACE: one line per textured quad lookup (diagnostics) */
         static int on = -1, lines, ylo, yhi;
-        if (on < 0) {   /* RR_TEXT_TRACE=ylo,yhi limits it to one band */
-            const char *e = getenv("RR_TEXT_TRACE");
+        static unsigned from;
+        if (on < 0) {   /* RR_TEXT_TRACE=ylo,yhi limits it to one band; RR_TEXT_TRACE_FROM=<frame> starts it later */
+            const char *e = getenv("RR_TEXT_TRACE"), *f = getenv("RR_TEXT_TRACE_FROM");
             on = e != NULL; ylo = -4096; yhi = 4096;
             if (e) sscanf(e, "%d,%d", &ylo, &yhi);
+            from = f ? (unsigned)strtoul(f, NULL, 10) : 0u;
         }
-        if (on && lines < 3000 && vy[0] >= ylo && vy[0] <= yhi) {
+        if (on && lines < 3000 && (unsigned)s_frame_count >= from && vy[0] >= ylo && vy[0] <= yhi) {
             lines++;
             fprintf(stderr, "TEXT f=%u src=%08X xy=%d,%d tag=%d own=%d a=%.1f why=%d w0=%08X\n", (unsigned)s_frame_count,
                     gp0_cmd_source_addr, vx[0], vy[0], t != NULL, t ? t->own : -1, t ? t->anchor : 0.0,
@@ -945,6 +947,219 @@ def _sub(source, old, new, count=1, what='interface'):
     return source.replace(old, new)
 
 
+# Graphics worker. In a race the emulated CPU is held for a whole linked-list GPU
+# DMA (dma_fast.py rr_hold_fast_walk), so no guest instruction can see when the
+# list is executed; executing it was about half of the emulation thread (capacity
+# 101 VBlanks/s with it, 227 without; 120 FPS needs 120). The walk itself stays on
+# the emulation thread, which charges its guest time as before, and hands each
+# word (a copy, so guest RAM can change freely) to this one worker in order.
+# The rule that keeps gpu.c single-threaded in effect: every public entry point
+# first waits for the queue to empty (RR_GW_ENTER), so nothing else ever touches
+# GPU state while the worker runs, and the render-thread ring only changes
+# producer across such a wait. The first entry after a walk is normally the next
+# frame's labels or the VBlank, long after the list is done. Off while Precise
+# vertices is on (the GTE's correction tables are shared), online (capped at 60)
+# and with RR_GW=0.
+GW_HEAD = r'''#include <stdatomic.h>
+#include <process.h>
+static _Atomic uint32_t rr_gw_head, rr_gw_tail;
+static _Thread_local int rr_gw_self;
+static uint32_t rr_vr_gpuread, rr_vr_mask, rr_vr_fast;   /* RR_GW_TRACE: VRAM reads (fast: from gpu.c's array) */
+void rr_gw_drain(void);
+#define RR_GW_ENTER() do { if (atomic_load_explicit(&rr_gw_head, memory_order_relaxed) != \
+    atomic_load_explicit(&rr_gw_tail, memory_order_acquire) && !rr_gw_self) rr_gw_drain(); } while (0)
+'''
+GW_TAIL = r'''
+/* ---- RR graphics worker (RoadRashJailbreak/tools/gpu_geometry.py) ---- */
+extern __declspec(dllimport) void __stdcall Sleep(unsigned long);
+extern int g_rr_pgxp_full;
+extern void gl_renderer_worker_release(void);   /* gpu_presentation.py */
+extern int rt_held(void);                         /* render_thread.c */
+static uint32_t rr_gw_lists, rr_gw_lists_held;   /* walks given to the worker / kept here (held) */
+enum { RR_GW_WORD, RR_GW_NODE, RR_GW_HEADER, RR_GW_END };
+#define RR_GW_CAP (1u << 20)
+typedef struct { uint32_t kind, a, b; } RrGwOp;
+static RrGwOp *rr_gw_q;
+void rr_gw_drain(void) {
+    while (atomic_load_explicit(&rr_gw_tail, memory_order_acquire) !=
+           atomic_load_explicit(&rr_gw_head, memory_order_relaxed)) __builtin_ia32_pause();
+}
+static void rr_gw_exec(const RrGwOp *op) {
+    switch (op->kind) {
+    case RR_GW_WORD: gpu_set_gp0_source(op->a); gpu_write_gp0_body(op->b); break;
+    case RR_GW_NODE: gpu_ws_validate_linked_list_node(op->a, op->b); gpu_set_gp0_linked_list_node(op->a, op->b); break;
+    case RR_GW_HEADER: gpu_ws_validate_linked_list_header(op->a, op->b); break;
+    default: gpu_ws_end_linked_list(); break;
+    }
+}
+static unsigned __stdcall rr_gw_main(void *unused) {
+    (void)unused;
+    rr_gw_self = 1;
+    uint32_t idle = 0;
+    for (;;) {
+        const uint32_t h = atomic_load_explicit(&rr_gw_head, memory_order_acquire);
+        uint32_t t = atomic_load_explicit(&rr_gw_tail, memory_order_relaxed);
+        if (h == t) {   /* spin between race frames; sleep once races stop */
+            if (++idle < 1500000u) __builtin_ia32_pause(); else Sleep(1);
+            continue;
+        }
+        idle = 0;
+        while (t != h) {
+            rr_gw_exec(&rr_gw_q[t & (RR_GW_CAP - 1u)]);
+            t++;
+            if (!(t & 255u) && t != h) atomic_store_explicit(&rr_gw_tail, t, memory_order_release);
+        }
+        /* A sync point here took the GL context onto this thread: give it back
+         * before the queue reads empty, while no other thread can enter gpu.c. */
+        gl_renderer_worker_release();
+        atomic_store_explicit(&rr_gw_tail, t, memory_order_release);
+    }
+    return 0;
+}
+/* Whether this walk goes to the worker. */
+int rr_gw_begin(void) {
+#ifdef PSX_HAS_RECOMP_NET
+    return 0;
+#else
+    static int off = -1;
+    if (off < 0) {
+        /* Off unless RR_GW=1. With the GPUREAD fix below a race runs at 184 VBlanks/s
+         * (owner's settings, 120 needed) with or without the worker, so it is kept for
+         * heavier scenes but not used by default (11 Nov 2026). */
+        const char *e = getenv("RR_GW");
+        off = !(e && e[0] == '1');
+        if (!off) {
+            rr_gw_q = (RrGwOp *)malloc(sizeof(RrGwOp) * RR_GW_CAP);
+            off = !rr_gw_q || !_beginthreadex(NULL, 0, rr_gw_main, NULL, 0, NULL);
+        }
+    }
+    /* The emulation thread holds the GL context (an upload, an ineligible frame: rt_acquire
+     * made it current there until the frame boundary): held draws go straight to GL, which
+     * on the worker had no context (black frames). Such a list runs here as before. */
+    if (rt_held()) { rr_gw_lists_held++; return 0; }
+    /* Races only (the state block's first byte is 1): menus also run lean timing. */
+    const uint32_t ctx = psx_read_word(0x8005B2F8u);
+    if (ctx < 0x80010000u || ctx >= 0x80200000u || (psx_read_word(ctx & ~3u) >> ((ctx & 3u) * 8u) & 0xFFu) != 1u) return 0;
+    if (off || g_rr_pgxp_full) return 0;
+    rr_gw_lists++;
+    if (getenv("RR_GW_TRACE") && !(rr_gw_lists & 1023u))
+        fprintf(stderr, "rr: graphics worker %u lists, %u kept (context held), VRAM reads: GPUREAD %u (%u from the array), mask check %u\n",
+                rr_gw_lists, rr_gw_lists_held, rr_vr_gpuread, rr_vr_fast, rr_vr_mask);
+    return 1;
+#endif
+}
+void rr_gw_push(uint32_t kind, uint32_t a, uint32_t b) {
+    const uint32_t h = atomic_load_explicit(&rr_gw_head, memory_order_relaxed);
+    while (h - atomic_load_explicit(&rr_gw_tail, memory_order_acquire) >= RR_GW_CAP) __builtin_ia32_pause();
+    RrGwOp *op = &rr_gw_q[h & (RR_GW_CAP - 1u)];
+    op->kind = kind; op->a = a; op->b = b;
+    atomic_store_explicit(&rr_gw_head, h + 1u, memory_order_release);
+}
+'''
+# Which VRAM pixels the GPU may have changed since their last upload (see gpu_worker:
+# GPUREAD). One byte per pixel: set for every drawing area, fill and VRAM copy, cleared
+# by an upload (without mask-bit checking) that rewrites them. A bounding box was not
+# enough: the boot clear fills all of VRAM, then the palettes are uploaded over it.
+GD_TRACK = r'''
+#include <string.h>
+static uint8_t rr_gd_map[512u * 1024u];
+static void rr_gd_set(int x, int y, int w, int h, uint8_t v) {
+    if (w <= 0 || h <= 0) return;
+    for (int r = 0; r < h; r++) {
+        const int yy = (y + r) & 511, x0 = x & 1023, n1 = w > 1024 - x0 ? 1024 - x0 : w;
+        memset(&rr_gd_map[(uint32_t)yy * 1024u + (uint32_t)x0], v, (size_t)n1);
+        if (w > n1) memset(&rr_gd_map[(uint32_t)yy * 1024u], v, (size_t)(w - n1 > 1024 ? 1024 : w - n1));   /* wraps */
+    }
+}
+static void rr_gd_add(int x, int y, int w, int h) { rr_gd_set(x, y, w, h, 1); }
+static int rr_gd_drawn(uint32_t x, uint32_t y) { return rr_gd_map[(y & 511u) * 1024u + (x & 1023u)]; }
+'''
+# Called constantly from the game thread and only read settings: no wait.
+GW_NO_WAIT = {'gpu_ws_display_width', 'gpu_vram_peek_cpu'}
+
+def gpu_worker(source):
+    import re
+    count = 0
+    def enter(m):
+        nonlocal count
+        if m[2] in GW_NO_WAIT: return m[0]
+        count += 1
+        return m[0] + '    RR_GW_ENTER();\n'
+    source = re.sub(r'^((?!static\b)[A-Za-z_][\w \t\*]*?\b(gpu_\w+|psx_ws_sprite_tag|rr_ws_tag_text)\([^;{}\n]*\)\s*\{)[ \t]*\n',
+                    enter, source, flags=re.M)
+    if count < 60: raise ValueError(f'gpu_worker: only {count} entry points found')
+    # GPUREAD without a render-thread sync where the GPU never draws. Every race frame the
+    # game reads back 32 palette pixels (588,504, one row) through VRAM-to-CPU; under the
+    # GL backend each read synced the render thread first: 3-4 ms of every 8.3 ms frame at
+    # 120 FPS, and the frame's list could not go to the graphics worker. Palette rows are
+    # only ever written by uploads, which gpu.c's own array holds at once. So a pixel
+    # outside everything the GPU has drawn into (every drawing area, fill and VRAM copy
+    # since boot, rr_gd_*) is read from that array; anything else syncs as before.
+    source = _sub(source, '    gr_fill_rect((int)dst_x, (int)dst_y, (int)width, (int)height, color16);\n',
+                  '    rr_gd_add((int)dst_x, (int)dst_y, (int)width, (int)height);\n'
+                  '    gr_fill_rect((int)dst_x, (int)dst_y, (int)width, (int)height, color16);\n', what='Fill area')
+    source = _sub(source, '            gr_copy_rect(src_x, src_y, dst_x, dst_y, w, h);\n',
+                  '            rr_gd_add((int)dst_x, (int)dst_y, (int)w, (int)h);\n'
+                  '            gr_copy_rect(src_x, src_y, dst_x, dst_y, w, h);\n', what='Copy area')
+    old = ('    draw_area_right  = param & 0x3FF;\n'
+           '    draw_area_bottom = (param >> 10) & 0x3FF;\n')
+    source = _sub(source, old, old + '    rr_gd_add((int)draw_area_left, (int)draw_area_top, (int)draw_area_right - (int)draw_area_left + 1,\n'
+                  '              (int)draw_area_bottom - (int)draw_area_top + 1);\n', what='Draw area')
+    old = '    gr_vram_upload_begin(vram_write_x, vram_write_y, vram_write_w, vram_write_h);\n'
+    source = _sub(source, old, '    if (!check_mask_bit) rr_gd_set((int)vram_write_x, (int)vram_write_y, (int)vram_write_w, (int)vram_write_h, 0);\n' + old,
+                  what='Upload area')
+    # Which VRAM reads still force a render-thread sync (RR_GW_TRACE): GPUREAD, or the mask-bit check of an upload.
+    source = _sub(source, '        value |= (uint32_t)gr_vram_read((int)rx, (int)ry) << (i * 16);\n',
+                  '        rr_vr_gpuread++;\n'
+                  '        value |= (uint32_t)(rr_gd_drawn(rx, ry) ? gr_vram_read((int)rx, (int)ry)\n'
+                  '                                                : (rr_vr_fast++, vram[(uint32_t)ry * 1024u + rx])) << (i * 16);\n', what='GPUREAD read')
+    source = _sub(source, '            if (check_mask_bit && (gr_vram_read((int)wx, (int)wy) & 0x8000)) {\n',
+                  '            if (check_mask_bit && (rr_vr_mask++, gr_vram_read((int)wx, (int)wy) & 0x8000)) {\n', what='Mask-bit read')
+    return GW_HEAD + GD_TRACK + source + GW_TAIL
+
+
+# Line primitives in the race HUD. Five-O's top bar is a frame of lines holding
+# badge sprites; the sprites are squashed with the HUD in widescreen but the
+# framework's line handlers are not, so the frame stayed 4:3-wide and the badges
+# sat outside their boxes. Lines are squashed about the screen centre, where the
+# frame is centred. Only straight lines in the top strip of a full-width view:
+# world lines are projected (already wide), and split-screen views have their own centre.
+HUD_LINES = r'''
+static void rr_hud_line(int32_t *x0, int32_t y0, int32_t *x1, int32_t y1) {
+    const int32_t W = ws_disp_w();
+    if (!ws_active() || !rr_ui_race_active() || ws_xden <= 0) return;
+    if (*x0 != *x1 && y0 != y1) return;
+    if ((int32_t)draw_area_right - (int32_t)draw_area_left < W * 3 / 4) return;
+    if (y0 - draw_offset_y >= 48 || y1 - draw_offset_y >= 48) return;
+    const int32_t c = draw_offset_x + W / 2;
+    *x0 = c + (int32_t)lround((double)(*x0 - c) * ws_xnum / ws_xden);
+    *x1 = c + (int32_t)lround((double)(*x1 - c) * ws_xnum / ws_xden);
+}
+'''
+
+def hud_lines(source):
+    anchor = 'static void gp0_exec_mono_line(void) {\n'
+    source = _sub(source, anchor, HUD_LINES + anchor, what='Mono line interface')
+    old = ('    x1 += draw_offset_x; y1 += draw_offset_y;\n'
+           '    {\n'
+           '        int32_t lx[2] = { x0, x1 }, ly[2] = { y0, y1 };\n')
+    source = _sub(source, old, '    x1 += draw_offset_x; y1 += draw_offset_y;\n    rr_hud_line(&x0, y0, &x1, y1);\n' + old.split('\n', 1)[1],
+                  count=2, what='Line handlers')
+    old = '            gr_draw_line(polyline_prev_x, polyline_prev_y, x, y, polyline_color);\n'
+    source = _sub(source, old,
+                  '            { int32_t hx0 = polyline_prev_x, hx1 = x; rr_hud_line(&hx0, polyline_prev_y, &hx1, y);\n'
+                  '              gr_draw_line(hx0, polyline_prev_y, hx1, y, polyline_color); }\n', what='Mono polyline')
+    old = ('            if (!psx_gpu_line_oversize(polyline_prev_x, polyline_prev_y, x, y))\n'
+           '                gr_draw_shaded_line(polyline_prev_x, polyline_prev_y,\n'
+           '                                    polyline_prev_c, x, y, polyline_color);\n')
+    source = _sub(source, old,
+                  '            if (!psx_gpu_line_oversize(polyline_prev_x, polyline_prev_y, x, y)) {\n'
+                  '                int32_t hx0 = polyline_prev_x, hx1 = x; rr_hud_line(&hx0, polyline_prev_y, &hx1, y);\n'
+                  '                gr_draw_shaded_line(hx0, polyline_prev_y, polyline_prev_c, hx1, y, polyline_color);\n'
+                  '            }\n', what='Shaded polyline')
+    return source
+
+
 # gpu_vram_peek without a renderer sync, for VRAM the GPU never draws into:
 # CLUT rows and texture pages, which only uploads write (palettes, the bike's
 # texture). gpu.c's array holds every upload at once (it is the renderer's
@@ -1035,11 +1250,13 @@ def extend(source):
     source=overlay_ranks(source)
     anchor='void gpu_ws_prepass_linked_list(uint32_t start_addr) {\n'
     source=_sub(source,anchor,HUD_EDIT_LIST+'\n'+anchor+'    rr_he_list(start_addr);   /* HUD_EDIT */\n',what='Prepass interface (HUD edit)')
+    source=hud_lines(source)
     source=text_tags(source)
     source=title_rects(source)
     source=panel_backdrop(source)
     source=skyline(source)
     source=_sub(source,'uint16_t gpu_vram_peek(int x, int y) {\n',VRAM_PEEK_CPU+'uint16_t gpu_vram_peek(int x, int y) {\n',what='VRAM peek interface')
+    source=gpu_worker(source)
     return 'extern int rr_ui_wide_frontend(void);\nextern int rr_ui_race_active(void);\n'+source
 if __name__=='__main__':
     import pathlib,sys

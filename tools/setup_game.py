@@ -33,6 +33,31 @@ def status(message):
     STATUS.write_text(message, encoding='utf-8')
     print(message, flush=True)
 
+NEED_GB = 8   # build folders, the two games and the compile cache (about 3 GB measured, cache up to 5 GB)
+
+def plain_reason(error):
+    """A failed setup in words a player can act on (launcher.c shows the line after "SETUP FAILED: ").
+    The build logs' last lines are read too, since a compiler stopped by antivirus or a full disk
+    only says so there."""
+    text = str(error)
+    for name in ('build.log', 'build-online.log', 'setup.log'):
+        try: text += '\n' + (DATA / name).read_text(encoding='utf-8', errors='replace')[-6000:]
+        except OSError: pass
+    low = text.lower()
+    if any(k in low for k in ('no space left', 'not enough space', 'disk full', 'errno 28', 'winerror 112')):
+        return f'Your drive is full. Setup needs about {NEED_GB} GB free. Free some space, then choose Run setup again.'
+    if any(k in low for k in ('contains a virus', 'potentially unwanted', 'winerror 225', 'access is denied', 'permission denied',
+                              'winerror 5]', 'is not recognized as an internal', 'being used by another process', 'winerror 32')):
+        return ('Your antivirus or another program blocked a build tool. Allow the RoadRashJailbreak folder in '
+                'your antivirus (or wait for its scan to finish), then choose Run setup again.')
+    if 'unsupported game revision' in low or 'does not contain the supported game' in low:
+        return 'This disc image is not Road Rash: Jailbreak (USA). Choose Repair / re-import game with the right .bin.'
+    if 'import your original game' in low:
+        return 'Import your original game first.'
+    if any(k in low for k in ('urlopen error', 'timed out', 'getaddrinfo', 'connection', 'could not be downloaded', 'sha-256')):
+        return 'A download failed. Check your internet connection, then choose Run setup again.'
+    return 'Setup could not finish. Choose Run setup again; if it fails again, choose Report a problem.'
+
 def sha256(path):
     h = hashlib.sha256()
     with open(path, 'rb') as f:
@@ -120,6 +145,8 @@ def netplay_libs():
 
 try:
     if not args.tools_only and not (DATA / 'game-disc.bin').is_file(): raise RuntimeError('Import your original game in the launcher first.')
+    free = shutil.disk_usage(DATA).free / 2**30
+    if free < NEED_GB: raise RuntimeError(f'Not enough space left on the drive ({free:.1f} GB free, about {NEED_GB} GB needed)')
     manifest = PACKAGE / 'recipe/toolkit.json'; pins = json.loads(manifest.read_text(encoding='utf-8')); pin_hash = sha256(manifest)
     if args.workspace:
         ws = pathlib.Path(args.workspace).resolve(); status('Using the selected local development toolkit')
@@ -179,6 +206,6 @@ try:
 except SystemExit:
     raise
 except Exception as e:
-    status('SETUP FAILED: ' + str(e))
+    status('SETUP FAILED: ' + plain_reason(e))
     with open(DATA / 'build.log', 'a', encoding='utf-8') as f: f.write('\n' + str(e) + '\n')
     sys.exit(1)

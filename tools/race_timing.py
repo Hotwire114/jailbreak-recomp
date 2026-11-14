@@ -133,7 +133,8 @@ static uint32_t rr_hz2_calls;       /* handler calls at 120 Hz: even full, odd h
 static int rr_half;                 /* the running handler call is a half VBlank */
 static uint32_t rr_carry;           /* half ticks the integer clock lags real time (0/1) */
 static int rr_fade_held, rr_pad_held;
-static uint32_t rr_fade_word, rr_pad_word, rr_pad_reset_word;
+static uint32_t rr_fade_word, rr_pad_word, rr_pad_addr, rr_pad_reset_word;   /* rr_pad_addr: where the pad word was held */
+static uint32_t rr_capped_races;   /* races in a row that ended held at 60 Hz (rr_hz2_admit) */
 static uint64_t rr_t2_frame, rr_t2_prev; /* clock in half ticks at the last two race frames */
 static int rr_t2_fresh, rr_t2_count;
 static uint32_t rr_last_s2;
@@ -153,7 +154,7 @@ static void rr_fps120_init(void) {
     if (t && t[0]) rr_fps_trace = fopen(t, "w");
 }
 /* PC option (Display > Frame rate 120 FPS). Takes effect at the next VBlank. */
-void rr_fps120_set(int on) { if (!rr_fps120_env) rr_fps120 = on != 0; }
+void rr_fps120_set(int on) { if (!rr_fps120_env) { if (on && !rr_fps120) rr_capped_races = 0u; rr_fps120 = on != 0; } }
 int rr_fps120_get(void) { return rr_fps120; }
 /* The gate runs at each VBlank edge before the guest takes that edge's IRQ, so
  * the handler call belongs to the period that just ended: rr_div_ended. */
@@ -180,14 +181,31 @@ static void rr_hz2_set(int on) {
  * seconds at a time looked like lag spikes. RR_FPS_FALLBACK=0 turns it off (A/B).
  * The second fallback of a race keeps it at 60 Hz until that race is over: the
  * owner's 1080p FXAA settings fell short by 8-60% now and then, and retrying 120
- * every few seconds was itself the stutter (14 switches in one session, 23 Oct). */
+ * every few seconds was itself the stutter (14 switches in one session, 23 Oct).
+ * Two races in a row that each ended held at 60 Hz keep races at 60 Hz for the
+ * rest of the session (turning 120 FPS off and on again retries): a PC that
+ * cannot hold 120 on its settings otherwise stumbled twice at the start of every
+ * race (22 fallbacks in one owner session, 10 Nov). */
 extern uint64_t SDL_GetPerformanceCounter(void);
 extern uint64_t SDL_GetPerformanceFrequency(void);
 static uint64_t rr_lag_t0, rr_hold_until, rr_hz2_began;
 static uint32_t rr_lag_n, rr_lag_slow, rr_backoff_s, rr_fallbacks, rr_race_fallbacks;
+static int rr_race_on;   /* a race is running (admit asked with want) */
 static int rr_hz2_admit(int want) {
-    if (!want) { rr_lag_n = 0; rr_race_fallbacks = 0; return 0; }   /* not racing: the next race tries 120 again */
-    if (rr_race_fallbacks >= 2u) return 0;
+    if (!want) {   /* not racing: the next race tries 120 again, unless the last two could not hold it */
+        if (rr_race_on) {
+            rr_race_on = 0;
+            rr_capped_races = rr_race_fallbacks >= 2u ? rr_capped_races + 1u : 0u;
+            if (rr_capped_races == 2u) {
+                printf("rr: 120 FPS races: two races in a row could not hold 120 FPS, 60 FPS for this session "
+                       "(a lower render resolution or anti-aliasing helps)\n");
+                fflush(stdout);
+            }
+        }
+        rr_lag_n = 0; rr_race_fallbacks = 0; return 0;
+    }
+    rr_race_on = 1;
+    if (rr_race_fallbacks >= 2u || rr_capped_races >= 2u) return 0;
     const uint64_t now = SDL_GetPerformanceCounter(), f = SDL_GetPerformanceFrequency();
     if (now < rr_hold_until) return 0;
     if (g_rr_vblank_div != 2u) { rr_lag_n = 0; rr_lag_slow = 0; rr_hz2_began = now; return 1; }
@@ -219,7 +237,8 @@ static int rr_hz2_admit(int want) {
 /* Put back what a half VBlank changed, should a hook have been missed. */
 static void rr_hz2_release(uint32_t ctx) {
     if (rr_fade_held) { rr_wr32(0x8005ACA8u, (rr_rd32(0x8005ACA8u) & ~4u) | (rr_fade_word & 4u)); rr_fade_held = 0; }
-    if (rr_pad_held) { rr_wr32(ctx + 0x64u, rr_pad_word); rr_pad_held = 0; }
+    (void)ctx;
+    if (rr_pad_held) { rr_wr32(rr_pad_addr, rr_pad_word); rr_pad_held = 0; }   /* where it was held, whatever ctx is now */
     rr_half = 0;
 }
 /* Exact physics step for this frame, in register `reg` (holding 218 * dt).
@@ -261,8 +280,8 @@ static void rr_hz2_observe(uint32_t pc) {
     case 0x8001B818u:     /* back from the fades; the pad poll follows when ctx+0x64 is odd */
         if (rr_fade_held) { rr_wr32(0x8005ACA8u, (rr_rd32(0x8005ACA8u) & ~4u) | (rr_fade_word & 4u)); rr_fade_held = 0; }
         if (rr_half && !rr_pad_held) {
-            rr_pad_word = rr_rd32(ctx + 0x64u); rr_pad_held = 1;
-            rr_wr32(ctx + 0x64u, rr_pad_word & ~1u);
+            rr_pad_addr = ctx + 0x64u; rr_pad_word = rr_rd32(rr_pad_addr); rr_pad_held = 1;
+            rr_wr32(rr_pad_addr, rr_pad_word & ~1u);
         }
         return;
     case 0x8001B840u:

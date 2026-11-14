@@ -367,14 +367,14 @@ def split_pieces(src, name):
     pieces.append(head + src[begin:])
     return pieces
 
-def split_units(out_dir, files, pieces=True):
+def split_units(out_dir, files, pieces=True, vertex=True):
     """Generated units with vertex-path functions are written split into out_dir, and big
     units are written in pieces (split_pieces, unless pieces is False); returns the list to
     compile (other units unchanged). Used by build_rr.py (one unit at a time, no pieces) and
     runtime-CMakeLists.txt."""
     out_dir = pathlib.Path(out_dir); out_dir.mkdir(parents=True, exist_ok=True); result = []
     for f in map(pathlib.Path, files):
-        src, n = split_vertex_path(f.read_text(encoding='latin-1'), f.parent)
+        src, n = split_vertex_path(f.read_text(encoding='latin-1'), f.parent) if vertex else (f.read_text(encoding='latin-1'), 0)
         parts = split_pieces(src, f.name) if pieces else [src]
         if not n and len(parts) == 1:
             result.append(f); continue
@@ -402,5 +402,7 @@ if __name__ == '__main__':
     import sys
     if sys.argv[1] == '--split':   # --split <out dir> <unit.c>...: prints the units to compile (CMake list)
         print(';'.join(p.as_posix() for p in split_units(sys.argv[2], sys.argv[3:])))
+    elif sys.argv[1] == '--pieces':   # the same without the vertex-path copies
+        print(';'.join(p.as_posix() for p in split_units(sys.argv[2], sys.argv[3:], vertex=False)))
     else:
         make_include_dir(sys.argv[1], sys.argv[2])

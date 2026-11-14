@@ -54,6 +54,61 @@ def build_target(toolbin,build,env,jobs,out=None):
     command=[toolbin/'cmake.exe','--build',build,'--target','rr-game','-j',jobs]
     try:run(command,env=env,out=out)
     except RuntimeError:say('Build stopped; trying once more');time.sleep(5);run(command,env=env,out=out)
+class Progress(threading.Thread):
+    """The launcher's progress bar while the games compile: every 2 s build-status.txt gets
+    "<message>\\nprogress=<0-100>" (launcher.c draws the bar from that line). Estimated from
+    recipe/build-times.json, one reference build's step times keyed by file name: the steps this
+    PC has finished (.ninja_log) give its speed against the reference. The whole build's length
+    is predicted, not the time left, so it counts down steadily through the one step that takes
+    minutes: compile = the larger of the work over the jobs (+20%: jobs idle near the end) and
+    the longest step; then the link, measured at about 2.2 + 13 / link jobs minutes. The
+    percentage never goes back."""
+    def __init__(self,builds,jobs,label):
+        super().__init__(daemon=True)
+        ref=json.loads((package/'recipe'/'build-times.json').read_text(encoding='utf-8'))
+        self.exe=ref['exe'];self.jobs=max(1,jobs);self.label=label;self.done=threading.Event()
+        self.builds=[(b,ref[kind],thread,self.size(b)) for b,kind,thread in builds]
+        self.t0=time.monotonic();self.percent=0;self.compiled=None
+    @staticmethod
+    def size(build):
+        p=build/'.ninja_log';return p.stat().st_size if p.exists() else 0
+    @staticmethod
+    def finished(build,offset):
+        """Steps finished since the build started: file name -> milliseconds."""
+        try:
+            with (build/'.ninja_log').open('rb') as f:f.seek(offset);text=f.read().decode('utf-8','replace')
+        except OSError:return {}
+        done={}
+        for line in text.splitlines():
+            p=line.split('\t')
+            if len(p)>=4 and p[0].isdigit() and p[1].isdigit():done[p[3].replace('\\','/').rsplit('/',1)[-1]]=int(p[1])-int(p[0])
+        return done
+    def total(self,now):
+        """Predicted seconds from the start of the build to the end."""
+        work=longest=done_ref=done_real=0;compiling=False;count=0
+        for build,ref,thread,offset in self.builds:
+            if thread is not None and not thread.is_alive():continue   # the online build ended (or was skipped)
+            done=self.finished(build,offset);count+=1
+            for name,ms in ref.items():
+                if name==self.exe:continue
+                work+=ms;longest=max(longest,ms)
+                if name in done:done_ref+=ms;done_real+=max(done[name],1)
+                else:compiling=True
+        speed=done_real/done_ref if done_ref>60000 else 1.0
+        link=60*(2.2+13/max(1,self.jobs/max(1,count)))*max(1.0,speed)
+        if compiling:self.compiled=None
+        elif self.compiled is None:self.compiled=now-self.t0
+        # 20 s to configure before the first step, 20 s to stage the game after the link.
+        return (self.compiled if self.compiled is not None else 20+speed*max(1.2*work/self.jobs,longest)/1000)+link+20
+    def write(self):
+        now=time.monotonic();elapsed=now-self.t0;left=max(30.0,self.total(now)-elapsed)
+        self.percent=max(self.percent,min(99,int(100*elapsed/(elapsed+left))))
+        when='under a minute left' if left<60 else f'about {int(left+59)//60} min left'
+        (store/'build-status.txt').write_text(f'{self.label}: {self.percent}%, {when} - keep this window open\nprogress={self.percent}\n',encoding='utf-8')
+    def run(self):
+        while not self.done.wait(2):
+            try:self.write()
+            except Exception:pass   # a progress estimate never stops the build
 def required(path):
     if not path.exists():raise RuntimeError('Missing local build dependency: '+str(path)+'. See README.md.')
     return path
@@ -192,7 +247,8 @@ default_enabled=true
     shutil.copy2(package/'tools/render_fast.py',source/'render_fast.py')
     build=store/'runtime-build'
     jobs=EACH if args.netplay_libs else JOBS
-    status(f'Building your native game{" and its online version" if args.netplay_libs else ""} ({JOBS} jobs) - keep this window open')
+    label=f'Building your native game{" and its online version" if args.netplay_libs else ""}'
+    status(f'{label} ({JOBS} jobs) - keep this window open')
     # ThinLTO is on by default (runtime-CMakeLists.txt); RR_BUILD_THINLTO=0 builds without it,
     # e.g. on a PC with little memory (the link needs about 2 GB).
     lto='OFF' if os.environ.get('RR_BUILD_THINLTO')=='0' else 'ON'
@@ -200,23 +256,31 @@ default_enabled=true
     # builds the instrumented trainer (tools/pgo_train_public.py), =off builds without.
     pgo_mode=os.environ.get('RR_BUILD_PGO','use');profile=package/'recipe'/'game.profdata'
     pgo_args=['-DRR_PGO_GENERATE='+('ON' if pgo_mode=='gen' else 'OFF'),'-DRR_PGO_USE='+(str(profile) if pgo_mode=='use' and profile.is_file() else '')]
-    configure=[toolbin/'cmake.exe','-S',source,'-G','Ninja','-DCMAKE_BUILD_TYPE=Release','-DCMAKE_C_COMPILER='+str(toolbin/'clang.exe'),'-DCMAKE_CXX_COMPILER='+str(toolbin/'clang++.exe'),'-DPSXRECOMP_ROOT='+str(framework),'-DRR_PRIVATE_ROOT='+str(private),'-DPSX_DEPS_OFFLINE=ON','-DPython3_EXECUTABLE='+sys.executable,'-DRR_THINLTO='+lto,'-DRR_LINK_JOBS='+str(jobs),*pgo_args]
-    online=threading.Thread(target=build_online,args=(configure,toolbin,framework,env));online.start()
+    # --fresh: a build folder from an older release keeps that release's option defaults otherwise
+    # (1.0's RR_TEXTURE_CORRECTION_FULL=OFF left upgraders without Precise vertices and with a
+    # different game from everyone else). Objects whose commands did not change are still reused.
+    configure=[toolbin/'cmake.exe','--fresh','-S',source,'-G','Ninja','-DCMAKE_BUILD_TYPE=Release','-DCMAKE_C_COMPILER='+str(toolbin/'clang.exe'),'-DCMAKE_CXX_COMPILER='+str(toolbin/'clang++.exe'),'-DPSXRECOMP_ROOT='+str(framework),'-DRR_PRIVATE_ROOT='+str(private),'-DPSX_DEPS_OFFLINE=ON','-DPython3_EXECUTABLE='+sys.executable,'-DRR_THINLTO='+lto,'-DRR_LINK_JOBS='+str(jobs),*pgo_args]
+    online=threading.Thread(target=build_online,args=(configure,toolbin,framework,env))
+    try:progress=Progress([(build,'offline',None)]+([(store/'runtime-netplay-build','online',online)] if args.netplay_libs else []),2*EACH if args.netplay_libs else JOBS,label)
+    except (OSError,ValueError,KeyError):progress=None   # no reference times: the launcher's moving bar
+    online.start()
+    if progress:progress.start()
     try:
         run([*configure,'-B',build],env=env)
         build_target(toolbin,build,env,jobs)
         runtime=stage_runtime(build,toolbin,framework)
-    finally:online.join()
+    finally:
+        online.join()
+        if progress:progress.done.set();progress.join()
     return runtime,'compiled from installed game data'
+import game_build_id
+GAME_BUILD_ID=game_build_id.build_id(package)
 def online_fingerprint():
-    """The same for every player with this release and game: online games only pair up when it matches."""
+    """The same for every player with the same game: online games only pair up when it matches.
+    Built on the game build ID (tools/game_build_id.py), not on every file, so a launcher-only
+    update that skipped the rebuild still pairs with a fresh install of that update."""
     h=hashlib.sha256()
-    for name in [EXE_HASH,FRAMEWORK_REVISION]:h.update(name.encode()+b'\0')
-    for folder in ['source','tools','recipe']:
-        for p in sorted((package/folder).rglob('*')):
-            if p.is_file() and '__pycache__' not in p.parts:
-                rel=p.relative_to(package).as_posix().encode();body=p.read_bytes()
-                h.update(rel+b'\0'+len(body).to_bytes(8,'little')+body)
+    for name in [EXE_HASH,FRAMEWORK_REVISION,GAME_BUILD_ID]:h.update(name.encode()+b'\0')
     return h.hexdigest()
 def build_online(configure,toolbin,framework,env):
     """The online game (runtime-netplay): the same sources with recomp-net, eight seats and the
@@ -255,7 +319,7 @@ try:
     # user's installed files rather than silently adopting an older backend.
     framework=required(workspace/'work/upstream/psxrecomp');recompiler=required(workspace/'work/build-framework/psxrecomp-game.exe');bios=required(baseline/'bios/openbios.bin')
     runtime,origin=compile_local(exe,cue,image_hash,toolbin,framework,recompiler,bios)
-    receipt={'schema':1,'created':time.strftime('%Y-%m-%d %H:%M:%S'),'game_executable_sha256':EXE_HASH,'installed_disc_sha256':image_hash,'runtime_sha256':digest(runtime),'framework_revision':FRAMEWORK_REVISION,'origin':origin,'original_disc_required_again':False,'distributed_game_data_or_backend':False,'presentation_adapter':'rr-pc-1.1','timing':'fast','precision_instrumentation':False,'pc_services_source_sha256':digest(package/'source/pc_services.cpp'),'discord_source_sha256':digest(package/'source/discord_presence.cpp'),'presentation_source_sha256':digest(package/'source/rider_enhancements.cpp'),'in_game_menu_source_sha256':digest(package/'source/rider_menu.cpp')}
+    receipt={'schema':1,'created':time.strftime('%Y-%m-%d %H:%M:%S'),'game_executable_sha256':EXE_HASH,'installed_disc_sha256':image_hash,'runtime_sha256':digest(runtime),'framework_revision':FRAMEWORK_REVISION,'origin':origin,'original_disc_required_again':False,'distributed_game_data_or_backend':False,'presentation_adapter':'rr-pc-1.2','game_build_id':GAME_BUILD_ID,'timing':'fast','precision_instrumentation':False,'pc_services_source_sha256':digest(package/'source/pc_services.cpp'),'discord_source_sha256':digest(package/'source/discord_presence.cpp'),'presentation_source_sha256':digest(package/'source/rider_enhancements.cpp'),'in_game_menu_source_sha256':digest(package/'source/rider_menu.cpp')}
     receipt['custom_music_source_sha256']=digest(package/'source/custom_music.cpp')
     receipt['hd_ui_source_sha256']=digest(package/'source/native_ui.cpp')
     receipt['voice_source_sha256']=digest(package/'source/taunt_voices.cpp')
