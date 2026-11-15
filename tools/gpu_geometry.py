@@ -1130,6 +1130,7 @@ static void rr_gd_set(int x, int y, int w, int h, uint8_t v) {
 }
 static void rr_gd_add(int x, int y, int w, int h) { rr_gd_set(x, y, w, h, 1); }
 static int rr_gd_drawn(uint32_t x, uint32_t y) { return rr_gd_map[(y & 511u) * 1024u + (x & 1023u)]; }
+extern void rr_probe_frame(void);   /* gpu_presentation.py: the race-frame count of the sun-flare pixel reads */
 '''
 # Called constantly from the game thread and only read settings: no wait.
 GW_NO_WAIT = {'gpu_ws_display_width', 'gpu_vram_peek_cpu'}
@@ -1168,6 +1169,7 @@ def gpu_worker(source):
     # Which VRAM reads still force a render-thread sync (RR_GW_TRACE): GPUREAD, or the mask-bit check of an upload.
     source = _sub(source, '        value |= (uint32_t)gr_vram_read((int)rx, (int)ry) << (i * 16);\n',
                   '        rr_vr_gpuread++;\n'
+                  '        if (((rx == 588u && ry == 504u) || (rx == 652u && ry == 376u)) && !rr_gd_drawn(rx, ry)) rr_probe_frame();   /* the per-frame strip, served below */\n'
                   '        value |= (uint32_t)(rr_gd_drawn(rx, ry) ? gr_vram_read((int)rx, (int)ry)\n'
                   '                                                : (rr_vr_fast++, vram[(uint32_t)ry * 1024u + rx])) << (i * 16);\n', what='GPUREAD read')
     source = _sub(source, '            if (check_mask_bit && (gr_vram_read((int)wx, (int)wy) & 0x8000)) {\n',

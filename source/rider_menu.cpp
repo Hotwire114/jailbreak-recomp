@@ -19,6 +19,7 @@
 #include "showroom.h"
 #include "mouse_menus.h"
 #include "online_screen.h"
+#include "jailbreak_you.h"
 #include <SDL3/SDL.h>
 #include <cstdint>
 #include <cstring>
@@ -566,6 +567,7 @@ extern "C" void __wrap_sio_set_pad_state_slot(int slot,uint16_t buttons){
     if(slot==0)buttons=rrpc::mouse_pad(buttons);   // mouse hover / clicks as Player 1's presses (mouse_menus.cpp)
     if(slot==0)buttons=rrpc::intro_skip_filter(buttons);
     {uint16_t out;if(rrpc::showroom_pad(slot,buttons,out)){if(slot==0)last_buttons=buttons;__real_sio_set_pad_state_slot(slot,out);return;}}
+    if(slot==0)buttons=rrpc::jail_pad(buttons);   // Jail Break's Weapon row (jailbreak_you.cpp)
     if(slot==1&&rrpc::rider_options().menu&&(open||SDL_GetTicks()<bypass_until)){__real_sio_set_pad_state_slot(slot,0xffff);return;}
     if(slot==1){
         // Pad 2 moves the root menu too: its Cross / Start leaves on the game's own tables.

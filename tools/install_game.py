@@ -29,6 +29,13 @@ def status(message):
 def digest(path):
     with path.open('rb') as f:return hashlib.file_digest(f,'sha256').hexdigest()
 def toml_path(path):return json.dumps(path.resolve().as_posix())
+def no_future_times(*roots):
+    now=time.time()
+    for root in roots:
+        for p in pathlib.Path(root).rglob('*'):
+            try:
+                if p.stat().st_mtime>now:os.utime(p,(now,now))
+            except OSError:pass
 def run(command,cwd=None,env=None,out=None):
     say('Running '+pathlib.Path(str(command[0])).name)
     result=subprocess.run([str(x) for x in command],cwd=cwd,env=env,stdout=out or log,stderr=subprocess.STDOUT)
@@ -228,7 +235,7 @@ default_enabled=true
     run([sys.executable,package/'tools/prepare_native_guard.py','--framework',framework,'--output',stage/'guard'],env=env)
     source=store/'runtime-project';source.mkdir(exist_ok=True)
     shutil.copy2(package/'source/runtime-CMakeLists.txt',source/'CMakeLists.txt')
-    for name in ['native_guard.c','native_kernel.c','rider_enhancements.cpp','rider_enhancements.h','rider_menu.cpp','pc_services.cpp','pc_services.h','discord_presence.cpp','discord_presence.h','custom_music.cpp','custom_music.h','native_ui.cpp','native_ui.h','taunt_voices.cpp','taunt_voices.h','mod_assets.cpp','mod_assets.h','quick_resume.cpp','quick_resume.h','menu_titles.cpp','controls_screen.cpp','controls_screen.h','netplay_session.cpp','netplay_session.h','game_editor.cpp','game_editor.h','hud_editor.cpp','gameplay_editor.cpp','demo_courses.cpp','demo_courses.h','editor_page.h','course_names.h','owner_assets.c','owner_assets.h','rider_model.h','showroom.cpp','showroom.h','rider_takeover.cpp','mouse_menus.cpp','mouse_menus.h','online_screen.cpp','online_screen.h','online_link.h','menu_canvas.h','disc_reader.h','mdec_image.h','mpeg_tables.h','hd_font_data.h','model_detail.h','achievements.h','gfx_options.h','cheat_codes.h','cheats_runtime.h','game_icon.h']:shutil.copy2(package/'source'/name,source/name)
+    for name in ['native_guard.c','native_kernel.c','rider_enhancements.cpp','rider_enhancements.h','rider_menu.cpp','pc_services.cpp','pc_services.h','discord_presence.cpp','discord_presence.h','custom_music.cpp','custom_music.h','native_ui.cpp','native_ui.h','taunt_voices.cpp','taunt_voices.h','mod_assets.cpp','mod_assets.h','quick_resume.cpp','quick_resume.h','menu_titles.cpp','controls_screen.cpp','controls_screen.h','netplay_session.cpp','netplay_session.h','game_editor.cpp','game_editor.h','hud_editor.cpp','gameplay_editor.cpp','demo_courses.cpp','demo_courses.h','jailbreak_you.cpp','jailbreak_you.h','editor_page.h','course_names.h','owner_assets.c','owner_assets.h','rider_model.h','showroom.cpp','showroom.h','rider_takeover.cpp','mouse_menus.cpp','mouse_menus.h','online_screen.cpp','online_screen.h','online_link.h','menu_canvas.h','disc_reader.h','mdec_image.h','mpeg_tables.h','hd_font_data.h','model_detail.h','achievements.h','gfx_options.h','cheat_codes.h','cheats_runtime.h','game_icon.h']:shutil.copy2(package/'source'/name,source/name)
     shutil.copy2(package/'tools/music_mixer.py',source/'music_mixer.py')
     shutil.copy2(package/'tools/spu_events.py',source/'spu_events.py')
     shutil.copy2(package/'tools/gpu_presentation.py',source/'gpu_presentation.py')
@@ -245,6 +252,11 @@ default_enabled=true
     shutil.copy2(package/'tools/texture_pack_speed.py',source/'texture_pack_speed.py')
     shutil.copy2(package/'tools/dma_fast.py',source/'dma_fast.py')
     shutil.copy2(package/'tools/render_fast.py',source/'render_fast.py')
+    # Ninja reruns CMake for ever ('build.ninja still dirty after 100 tries') when an input is dated
+    # in the future: the release zip keeps the packaging PC's local times, so a player in an earlier
+    # time zone building soon after a release, or with a wrong clock, got stuck at the build step.
+    # No source here is newer than now.
+    no_future_times(source,package)
     build=store/'runtime-build'
     jobs=EACH if args.netplay_libs else JOBS
     label=f'Building your native game{" and its online version" if args.netplay_libs else ""}'

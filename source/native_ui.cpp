@@ -9,6 +9,7 @@
 #include "netplay_session.h"
 #include "game_editor.h"
 #include "demo_courses.h"
+#include "jailbreak_you.h"
 #include "cpu_state.h"
 #include "mod_plugins.h"
 #include "gpu.h"
@@ -1047,4 +1048,4 @@ extern "C" int rr_ui_panel(int y0,int y1,uint32_t src,int*rx0,int*ry0,int*rx1,in
 }
 // Online also the PC layer's game-state ticks (netplay_session.cpp): the
 // emulated VBlank is the same guest moment on both PCs.
-extern "C" void __wrap_gpu_vblank_tick(){menu_uncap();__real_gpu_vblank_tick();rrpc::net_guest_tick();rrpc::demo_tick();rrpc::unblink_players();rrpc::grid_tick();}
+extern "C" void __wrap_gpu_vblank_tick(){menu_uncap();__real_gpu_vblank_tick();rrpc::net_guest_tick();rrpc::demo_tick();rrpc::jail_tick();rrpc::unblink_players();rrpc::grid_tick();}

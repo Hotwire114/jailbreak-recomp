@@ -983,6 +983,11 @@ static const int s_rr_probe_xy[2][2] = { { 588, 504 }, { 652, 376 } };   /* one 
 static uint16_t s_rr_probe[2][2][RR_PROBE_W];
 static int s_rr_probe_cur[2] = { -1, -1 };   /* buffer being served per strip; -1 = none yet */
 static uint32_t s_rr_tick;                   /* race frames, counted at the strip's first pixel */
+/* The strip is now usually served from gpu.c's own array (gpu_geometry.py, GPUREAD of
+ * undrawn VRAM) and never reaches rtb_vram_read: gpu.c counts the frame here instead.
+ * Without it s_rr_tick stayed 0 from 1.2 on and every sun-flare pixel read synced the
+ * render thread (frame rate fell whenever the sun was on screen). */
+void rr_probe_frame(void) { if (rr_ui_in_race()) s_rr_tick++; }
 /* Pixels of the drawn frame (the sun-flare test, race overlay 0x800B74F0, reads
  * one or two pixels at the sun every frame): served from a 32x32 window around
  * the last read, copied asynchronously in that frame's command order, so a read

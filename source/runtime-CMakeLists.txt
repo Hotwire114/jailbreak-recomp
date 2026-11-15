@@ -97,7 +97,7 @@ file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/memory_release.c"
 target_sources(rr-game PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/memory_release.c")
 
 target_sources(rr-game PRIVATE "${RR_PRIVATE_ROOT}/stage2/guard/dirty_ram_interp_guarded.c"
- native_guard.c native_kernel.c rider_enhancements.cpp rider_menu.cpp pc_services.cpp discord_presence.cpp custom_music.cpp native_ui.cpp taunt_voices.cpp mod_assets.cpp quick_resume.cpp menu_titles.cpp controls_screen.cpp netplay_session.cpp game_editor.cpp hud_editor.cpp gameplay_editor.cpp demo_courses.cpp showroom.cpp mouse_menus.cpp online_screen.cpp owner_assets.c
+ native_guard.c native_kernel.c rider_enhancements.cpp rider_menu.cpp pc_services.cpp discord_presence.cpp custom_music.cpp native_ui.cpp taunt_voices.cpp mod_assets.cpp quick_resume.cpp menu_titles.cpp controls_screen.cpp netplay_session.cpp game_editor.cpp hud_editor.cpp gameplay_editor.cpp demo_courses.cpp jailbreak_you.cpp showroom.cpp mouse_menus.cpp online_screen.cpp owner_assets.c
  "${RR_PRIVATE_ROOT}/stage2/kernel-native/rr_kernel_code_bios.c"
  "${RR_PRIVATE_ROOT}/stage2/kernel-native/rr_kernel_code_redirect.c"
  "${RR_PRIVATE_ROOT}/stage2/kernel-native/rr_kernel_code_sdk.c")

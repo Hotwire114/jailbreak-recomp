@@ -15,6 +15,7 @@
 #include "netplay_session.h"
 #include "game_editor.h"
 #include "demo_courses.h"
+#include "jailbreak_you.h"
 #include "showroom.h"
 #include <windows.h>
 #include <cstdint>
@@ -122,7 +123,16 @@ static uint32_t text_origin(CPUState*c){
     return ra;
 }
 // The seat whose name this draw shows, or -1.
+static int named_seat_any(CPUState*c,uint32_t origin,uint32_t table);
+// Jail Break: only the YOU rider (jailbreak_you.cpp) is named; every stock
+// alias keeps its own name, in races (mode bit 0x20) and on the frontend's
+// profile panels (Jail Break campaigns: Continue's Alias line, status page).
 static int named_seat(CPUState*c,uint32_t origin,uint32_t table){
+    const int seat=named_seat_any(c,origin,table);if(seat<0)return seat;
+    uint32_t cfg=word(0x8005B2F8);const bool jail=race_overlay()?range(cfg,8)&&(byte_at(cfg+4)&0x20):true;
+    return jail&&rrpc::jail_stock_seat((unsigned)seat)?-1:seat;
+}
+static int named_seat_any(CPUState*c,uint32_t origin,uint32_t table){
     uint32_t cfg=word(0x8005B2F8),a1=c->gpr[5];unsigned players=range(cfg,0x34)?word(cfg+0x30):0;
     if(race_overlay()){
         if(origin==0x80061EE4)return c->gpr[16]<players?(int)c->gpr[16]:-1;
@@ -408,8 +418,10 @@ static void look_apply(){
     // of the seat whose row is selected, and steps back to Original too.
     const int shown=rrpc::showroom_seat();
     for(unsigned seat=0;seat<players;seat++){uint32_t rec=seat_record(seat);if(!rec)continue;const unsigned o=shown>=0&&seat==0?(unsigned)shown:seat;
+        // Jail Break: the stock aliases as the game has them; the YOU rider wears the Rider look.
+        if((mode&0x20)&&rrpc::jail_stock_seat(seat))continue;
         int hue=rr_paint_hue(options.paint[o]);if(hue>=0)paint_bike(rec,players,hue);else if(shown>=0)unpaint_bike(rec);
-        if(!(mode&0x20))dress_rider(rec,players,seat,options.outfit[o],options.colour[o]);}
+        dress_rider(rec,players,seat,options.outfit[o],options.colour[o]);}
 }
 // The screen a text draw belongs to, for the in-game editor's Game text page
 // (game_editor.cpp); nullptr in a cop race (Five-O keeps the game's words).
@@ -441,6 +453,7 @@ extern "C" void __wrap_func_8002CDC8(CPUState*c){
     if(!rrpc::netplay())rrpc::controls_prompt_text(c->gpr[5]);
     // Time Trial's demo courses: the page's summary names the selected one.
     rrpc::demo_text(c);
+    rrpc::jail_text(c);   // Jail Break: the YOU entry's panel and Weapon row
     const uint32_t game_string=c->gpr[5];   // the PC menu may point a1 at its own text
     if(rrpc::rider_menu_font(c))return;
     uint32_t origin=text_origin(c),table=word(c->gpr[28]+0x8b8);bool named=false;

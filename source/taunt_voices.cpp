@@ -26,6 +26,7 @@
 #include "owner_assets.h"
 #include "netplay_session.h"
 #include "showroom.h"
+#include "jailbreak_you.h"
 #include "cpu_state.h"
 #include "mod_plugins.h"
 #include "spu.h"
@@ -105,6 +106,7 @@ uint32_t half(uint32_t p){uint16_t v;std::memcpy(&v,memory_get_ram_ptr()+(p&0x1f
 // Five-O (race mode byte *(0x8005B2F8)+4 == 1): the player is a cop and keeps
 // the game's own cop voice and lines (owner's choice); only the name changes.
 bool five_o(){uint32_t cfg=word(0x8005b2f8);return valid(cfg,8)&&memory_get_ram_ptr()[(cfg+4)&0x1fffff]==1;}
+bool jail_mode(){uint32_t cfg=word(0x8005b2f8);return valid(cfg,8)&&(memory_get_ram_ptr()[(cfg+4)&0x1fffff]&0x20);}   // Jail Break: only the YOU rider speaks with the chosen voice (jailbreak_you.cpp)
 // The resident slot (of nine, 32 bytes: bank, id, state, kind per variant,
 // sample per variant) holding this seat's block rebuilt with its voice, or -1.
 int own_slot(unsigned seat){
@@ -164,7 +166,7 @@ void voice_observe(uint32_t pc){
   // kind 3, or 0xB when none is resident, from pools every rider shares (no
   // character has its own), so a knocked-off player screams as in the stock game.
   bool pain=word(sp+0x84)!=0||kind==3||kind==0xB;
-  int moved=-1;bool own=false;unsigned voice=player&&!five_o()&&!pain?rider_options().voice[seat]:0;
+  int moved=-1;bool own=false;unsigned voice=player&&!five_o()&&!pain&&!(jail_mode()&&rrpc::jail_stock_seat(seat))?rider_options().voice[seat]:0;
   if(voice){
    int slot=own_slot(seat);
    if(slot>=0&&kind!=(seat<<4|6)){
@@ -185,7 +187,7 @@ void voice_observe(uint32_t pc){
   uint32_t id=c->gpr[5]&0xffff,at=c->gpr[4]-0x20;unsigned kind=id&255,set=id>>8&0x7f;
   if(FILE*f=vtrace()){std::fprintf(f,"t=%llu stream id=%04x kind=%02x set=%u header=%08x\n",(unsigned long long)SDL_GetTicks(),id,kind,set,valid(at,4)?word(at):0);std::fflush(f);}
   if(kind!=6&&kind!=0x16&&(!test_kind()||kind!=test_kind()))return;unsigned seat=kind==0x16;
-  unsigned voice=five_o()?0:rider_options().voice[seat];if(!voice||set<1||set>27)return;init();
+  unsigned voice=five_o()||(jail_mode()&&rrpc::jail_stock_seat(seat))?0:rider_options().voice[seat];if(!voice||set<1||set>27)return;init();
   if(!valid(at,BLOCK)||(word(at)&~0x8000u)!=(0xa0000000u|(id&0x7fff)))return;unsigned char*dst=memory_get_ram_ptr()+(at&0x1fffff);if(!entries(dst))return;
   Clip a,b;if(!pick(voice,seat,set,a,b))return;rebuild(dst,a,b);
   Swap*w=nullptr;for(auto&s:swapped)if(s.active&&s.id==id)w=&s;if(!w)w=&swapped[swaps++%8];

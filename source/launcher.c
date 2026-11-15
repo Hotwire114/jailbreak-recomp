@@ -146,6 +146,10 @@ static const wchar_t *pad_labels_ps[]={L"Cross",L"Circle",L"Square",L"Triangle",
 static int pad_ps,preview_pad=-1;   /* preview_pad: --preview-pad, the page drawn as if that pad had just been used */
 static const wchar_t *pad_label(const wchar_t *source){for(int i=0;i<16;i++)if(!wcscmp(source,pad_sources[i]))return ((preview_pad>=0?preview_pad:pad_ps)?pad_labels_ps:pad_labels)[i];return source;}
 static void pad_kind_used(int playstation){
+    /* A controller used here plays Player 1 too. Player 1 on the keyboard
+       (a fresh install's default) left that pad unread in the game, while the
+       keyboard still works with Player 1 on a controller. */
+    if(!device){device=1;WritePrivateProfileStringW(L"controls",L"device",L"1",ini);InvalidateRect(mainwindow,NULL,FALSE);}
     if(pad_ps==!!playstation)return;
     pad_ps=!!playstation;WritePrivateProfileStringW(L"controls",L"pad_style",pad_ps?L"playstation":L"xbox",ini);InvalidateRect(mainwindow,NULL,FALSE);
 }
@@ -328,11 +332,14 @@ static int write_runtime_settings(void){
     wchar_t path[32768],runtime[32768],exe[32768],save[32768];join(runtime,store,online_launch?online_runtime:enhanced_mode?L"runtime":L"runtime-original");ensure(runtime);join(exe,store,L"inputs\\SLUS_010.53");join(path,store,enhanced_mode?L"game.toml":L"game-original.toml");join(save,store,L"saves");ensure(save);
     FILE*f=_wfopen(path,L"wb");if(!f)return 0;
     fputs("[game]\nname=\"Road Rash Jailbreak\"\nid=\"SLUS-01053\"\nexe=",f);toml_path(f,exe);fputs("\ndisc=",f);toml_path(f,exists(cuefile)?cuefile:discfile);
-    /* Players 3 / 4 on: four seats, which arms the runtime's multitap on port 1
-       when the game starts (pads 1-4 on it, all digital: the runtime's
-       DualShock-on-tap option leaves Player 1 unread in this game). Off: no
-       multitap, as before. */
-    if(enhanced_mode&&!online_launch&&(p3_device||p4_device))fputs("\nplayers=4",f);
+    /* The runtime reads only this many ports in a local game (1 when missing,
+       which left Player 2's controller connected but unread). Two seats always,
+       so a second controller switched on mid-game is read too. Players 3 / 4
+       on: four seats, which arms the runtime's multitap on port 1 when the game
+       starts (pads 1-4 on it, all digital: the runtime's DualShock-on-tap option
+       leaves Player 1 unread in this game). Online play reads each PC's own
+       controller and ignores this. */
+    if(!online_launch)fputs(enhanced_mode&&(p3_device||p4_device)?"\nplayers=4":"\nplayers=2",f);
     fputs("\nload_address=\"0x80010000\"\nentry_pc=\"0x8004032C\"\ntext_size=\"0x4B800\"\nstack_base=\"0x801FFFF0\"\n[recompiler]\nseeds=\"inputs/seeds.txt\"\nstrict=true\nout_dir=\"compile/framework-generated\"\n[runtime]\nwindow_title=\"Road Rash Jailbreak\"\nbios_hle=false\nopenbios=true\n",f);if(enhanced_mode)fputs("idle_skip=true\nfast_boot=true\n",f);fputs("[controller]\n",f);
     /* Enhanced: a controller seat is a DualShock ("analog"); the game's own
        Controllers screen chooses Analog 1/2 or, through the pad's emulated

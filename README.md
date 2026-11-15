@@ -57,6 +57,7 @@ Some antivirus programs (Norton, for example) hold a newly built, unsigned exe o
 ### Quality of life
 - **Fast loading.** An emulated 4x disc drive, so races load in about half a second. Optional **intro skip**.
 - **In-game PC menu** on the main menu's Options row and in the pause menu. Display (Screen, Picture, draw distance, Effects), riders, audio and system settings, all applied without leaving the game.
+- **Jail Break as YOU.** A fourth Alias, YOU, rides your own rider (Rider look, name and taunt voice), and a Weapon row lets you start the campaign with any weapon, taser included. The game's own aliases play exactly as they always have.
 - **Saves browser.** Play, copy, export and import memory-card saves (.mcs), with each save's profiles listed. Jail Break saves show the rider you picked, with their portrait. Both cards are backed up automatically before every launch.
 - **Quick resume.** Save and resume a race from the pause menu, or straight from the launcher.
 - **Mouse in the game's menus.** Point at a row to select it, click to choose, right-click to go back, scroll to move.
