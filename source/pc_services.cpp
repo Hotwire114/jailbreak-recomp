@@ -341,10 +341,48 @@ const int32_t cull_stock[cull_words]={7680,7680,7680,12480,7680,7680,6400};
 void cull_scaled(int percent,int32_t*out){for(int i=0;i<cull_words;i++)out[i]=i>=1&&i<=3?cull_stock[i]*percent/100:cull_stock[i];}
 int draw_percent(){static int env=[]{const char*e=std::getenv("RR_DRAW_SCALE");int p=e?std::atoi(e):0;return p>=100&&p<=1000?p:0;}();
     return env?env:rr_draw_percent(options.draw);}
+// Frozen riders. The game stops updating a rider and its bike once they are
+// far from the camera (about 21,600 away): their camera distance (+0x2C per
+// view) and pose stay as they were. The stock cull distance hides them long
+// before that, but a larger one (3x: 23,040) drew them with their old
+// placement: copies of riders floating over the track, replaying their last
+// moves. A rider or bike past the stock cull whose distance has not changed
+// for kFrozenFrames game frames gets a far distance (kFar, a value the game's
+// own data holds), so the draw skips it as it always did; the game writes the
+// real distance again as soon as it updates the object. Bikes are the race
+// actors (*0x8005B3A0, 0x448 apart); riders are 0x274 apart, Player 1's last,
+// each AI rider hanging off its bike (+0x38) while riding.
+constexpr uint32_t kActors=0x8005B3A0,kFrameCounter=0x8005AC8C+0x7E0;
+constexpr uint32_t kActorStride=0x448,kRiderStride=0x274;constexpr int kRaceRiders=16,kFrozenFrames=8;constexpr int32_t kFar=0x10000;
+uint32_t ram_word(uint32_t a){uint32_t v;std::memcpy(&v,memory_get_ram_ptr()+(a&0x1fffff),4);return v;}
+bool ram_ptr(uint32_t a){return a>=0x80010000u&&a<0x801FF000u&&!(a&3);}
+int object_type(uint32_t object){const uint32_t mesh=ram_word(object);if(!ram_ptr(mesh))return -1;uint16_t f;std::memcpy(&f,memory_get_ram_ptr()+((mesh+0x0E)&0x1fffff),2);return (f&0x78)>>3;}
+void hide_frozen(){
+    struct Seen{uint32_t object=0;int32_t d[2]{};uint32_t since[2]{};};
+    static Seen seen[2*kRaceRiders+1];
+    const uint32_t frame=ram_word(kFrameCounter),actors=ram_word(kActors);
+    if(!ram_ptr(actors)||!ram_ptr(actors+kActorStride*(kRaceRiders+1)))return;
+    uint32_t objects[2*kRaceRiders+1]{};int n=0;
+    for(int i=0;i<=kRaceRiders;i++){const uint32_t a=actors+kActorStride*i;if(object_type(a)==2)objects[n++]=a;}
+    // The rider array, from an AI rider still on its bike (actor i >= 1 carries rider i-1).
+    uint32_t riders=0;
+    for(int i=1;i<kRaceRiders&&!riders;i++){const uint32_t kid=ram_word(actors+kActorStride*i+0x38);if(ram_ptr(kid)&&object_type(kid)==1&&kid>=kRiderStride*(i-1))riders=kid-kRiderStride*(i-1);}
+    if(riders&&ram_ptr(riders+kRiderStride*kRaceRiders))
+        for(int i=0;i<kRaceRiders;i++){const uint32_t o=riders+kRiderStride*i;if(object_type(o)==1)objects[n++]=o;}
+    for(int k=0;k<n;k++){
+        Seen&s=seen[k];if(s.object!=objects[k])s=Seen{objects[k]};
+        for(int v=0;v<2;v++){
+            const uint32_t at=objects[k]+0x2C+4*v;const int32_t d=(int32_t)ram_word(at);
+            if(d!=s.d[v]||s.since[v]==0){s.d[v]=d;s.since[v]=frame?frame:1;continue;}
+            if(d<=cull_stock[1]||d>=kFar||frame-s.since[v]<(uint32_t)kFrozenFrames)continue;
+            psx_mod_write_word(at,(uint32_t)kFar);s.d[v]=kFar;s.since[v]=frame?frame:1;psx_mod_counter_add("rr.draw.frozen_hidden",1);
+        }
+    }
+}
 void apply_draw(){
     static int last=-1;static int32_t target[cull_words];int p=draw_percent();if(p!=last){cull_scaled(p,target);last=p;}
     auto*r=memory_get_ram_ptr()+(cull_table&0x1fffff);int32_t now[cull_words];std::memcpy(now,r,sizeof now);
-    if(!std::memcmp(now,target,sizeof now))return;
+    if(!std::memcmp(now,target,sizeof now)){if(p>100)hide_frozen();return;}
     // Stock values or another menu step (e.g. a savestate made with another setting).
     bool ours=false;for(int s=0;s<rr_draw_steps&&!ours;s++){int32_t check[cull_words];cull_scaled(rr_draw_percent(s),check);ours=!std::memcmp(now,check,sizeof now);}
     if(!ours)return;   // not the race overlay's table (menus, another revision, a mod)

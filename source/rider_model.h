@@ -170,6 +170,9 @@ static void rm_tri(const RmVtx*a,const RmVtx*b,const RmVtx*c,const RmMat*mt,uint
   zb[k]=z;px[k]=0xff000000u|(uint32_t)R<<16|(uint32_t)G<<8|(uint32_t)B;}
 }
 /* The rider on the bike, yaw degrees around the vertical. ss = supersampling (1-3). */
+/* A rider sheet and its 128 colours used instead of set_id / slot (Spaz:
+ * owner_assets.c rr_look_preview3d sets these around one rm_render call). */
+static const unsigned char*rm_tex_override;static const uint16_t*rm_pal_override;
 static int rm_render(int body,unsigned set_id,int slot,int paint_hue,double yaw,uint32_t*out,unsigned w,unsigned h,int ss){
  if(!rm.ready||!look_tex||!out||!w||!h||w>2048||h>2048)return 0;if(ss<1)ss=1;if(ss>3)ss=3;
  const RmModel*rider=rm.rider+(body!=0),*bike=&rm.bike;
@@ -207,9 +210,10 @@ static int rm_render(int body,unsigned set_id,int slot,int paint_hue,double yaw,
  {double sx=W/2.0,syy=oy+mxy*f-H*.02,ax=(mxx-mnx)*f*.52,ay=H*.07;
   for(int y=0;y<H;y++)for(int x=0;x<W;x++){double dx=(x-sx)/ax,dy=(y-syy)/ay,q=dx*dx+dy*dy;if(q<1){uint32_t*p=px+(size_t)y*W+x;double k=.55*(1-q);uint32_t r=(uint32_t)((*p>>16&255)*(1-k)),g=(uint32_t)((*p>>8&255)*(1-k)),b=(uint32_t)((*p&255)*(1-k));*p=0xff000000u|r<<16|g<<8|b;}}}
  /* Materials. */
- RmMat rmat={0},bmat={0},wmat={0};const unsigned char*bpal=NULL;rmat.tex=rm_lect(set_id,NULL);bmat.tex=rm_lect(rm.bike_tex,&bpal);wmat.wheel=1;
+ RmMat rmat={0},bmat={0},wmat={0};const unsigned char*bpal=NULL;rmat.tex=rm_tex_override?rm_tex_override:rm_lect(set_id,NULL);bmat.tex=rm_lect(rm.bike_tex,&bpal);wmat.wheel=1;
  if(!rmat.tex||!bmat.tex){free(P);free(N);free(px);free(zb);free(sv);return 0;}
- {const unsigned char*pal=look_tex+0x14+((15-slot/3)*384+(slot%3)*128)*2;for(int i=0;i<256;i++){unsigned v=i<128?(unsigned)(pal[i*2]|pal[i*2+1]<<8):0;rmat.pal[i]=(v&0x7fff)?rm_rgb(v):0;}}
+ if(rm_pal_override)for(int i=0;i<256;i++){unsigned v=i<128?rm_pal_override[i]:0;rmat.pal[i]=(v&0x7fff)?rm_rgb(v):0;}
+ else{const unsigned char*pal=look_tex+0x14+((15-slot/3)*384+(slot%3)*128)*2;for(int i=0;i<256;i++){unsigned v=i<128?(unsigned)(pal[i*2]|pal[i*2+1]<<8):0;rmat.pal[i]=(v&0x7fff)?rm_rgb(v):0;}}
  {uint16_t pal[256];for(int i=0;i<256;i++)pal[i]=(uint16_t)(bpal[i*2]|bpal[i*2+1]<<8);if(paint_hue>=0)rm_paint(pal,128,bmat.tex,paint_hue);for(int i=0;i<256;i++)bmat.pal[i]=(pal[i]&0x7fff)?rm_rgb(pal[i]):0;}
  /* Faces. */
  for(int m=0;m<2;m++){const RmModel*mo=m?bike:rider;unsigned base=m?rider->nv:0;

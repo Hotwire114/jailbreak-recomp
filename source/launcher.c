@@ -673,6 +673,7 @@ static void go_back(void){
     if(nav_depth&&nav_pages[nav_depth-1]==parent)selected=nav_rows[--nav_depth];else{nav_depth=0;selected=0;}
     page=parent;list_first=0;InvalidateRect(mainwindow,NULL,FALSE);
 }
+#include "launcher_motion.h"
 
 typedef struct NamePrompt {HWND edit;wchar_t name[9];int accepted;} NamePrompt;
 static LRESULT CALLBACK name_proc(HWND window,UINT msg,WPARAM wp,LPARAM lp){
@@ -938,7 +939,9 @@ static LRESULT CALLBACK proc(HWND window,UINT msg,WPARAM wp,LPARAM lp){
     if(msg==WM_DESTROY){lb_close();lb_unmap();PostQuitMessage(0);return 0;}
     if(msg==WM_CLOSE){if(dev_leave_ok())DestroyWindow(window);return 0;}
     if(msg==WM_ERASEBKGND)return 1;
-    if(msg==WM_TIMER&&wp==2){sb_pad_poll(window);lb_poll(window);ol_poll();if(busy)InvalidateRect(window,NULL,FALSE);return 0;}
+    if(msg==WM_TIMER&&wp==2){sb_pad_poll(window);lb_poll(window);ol_poll();if(busy&&!mo_toast_refresh())InvalidateRect(window,NULL,FALSE);return 0;}
+    if(msg==WM_TIMER&&wp==3){mo_tick();return 0;}          /* launcher_motion.h: something is moving */
+    if(msg==WM_TIMER&&wp==4){mo_glint_timer();return 0;}   /* an occasional glint */
     if(msg==WM_TIMER){
         if(builder){wchar_t path[32768];join(path,store,busy==3?L"mods\\status.txt":busy==4?L"launch-status.txt":L"build-status.txt");FILE*f=_wfopen(path,L"rb");if(f){char line[1024]={0};size_t n=fread(line,1,sizeof(line)-1,f);fclose(f);
             /* install_game.py's compile progress: a second line "progress=<0-100>" (no line: the moving bar). */
@@ -965,7 +968,7 @@ static LRESULT CALLBACK proc(HWND window,UINT msg,WPARAM wp,LPARAM lp){
             if(quick_start==2&&!code&&!IsWindowVisible(window)){DestroyWindow(window);return 0;}if(quick_start)quick_reveal();settings();notice(code?L"The research game stopped here. Details are saved in runtime.log.":L"GAME CLOSED \u2014 READY TO PLAY AGAIN");}}
         /* tuning.ini changed outside the launcher (by hand, an import): use it. */
         {FILETIME s=file_stamp(tuning_path);if(CompareFileTime(&s,&tuning_stamp)){tuning_load(1);InvalidateRect(window,NULL,FALSE);}}
-        if(busy||toast_visible()!=toast_painted)InvalidateRect(window,NULL,FALSE);return 0;
+        if(toast_visible()!=toast_painted||(busy&&!mo_toast_refresh()))InvalidateRect(window,NULL,FALSE);return 0;   /* progress alone redraws only its bar */
     }
     if(msg==WM_APP+3){update_checked((int)wp);return 0;}
     if(msg==WM_APP+2){online_ready_to_play((int)wp,(int)lp);InvalidateRect(window,NULL,FALSE);return 0;}
@@ -1022,7 +1025,7 @@ static LRESULT CALLBACK proc(HWND window,UINT msg,WPARAM wp,LPARAM lp){
     if(msg==WM_SIZE){InvalidateRect(window,NULL,FALSE);return 0;}
     if(msg==WM_DPICHANGED){RECT*r=(RECT*)lp;SetWindowPos(window,NULL,r->left,r->top,r->right-r->left,r->bottom-r->top,SWP_NOZORDER|SWP_NOACTIVATE);return 0;}
     if(msg==WM_GETMINMAXINFO){UINT dpi=window_dpi(window);SIZE s=window_size_for_client(MulDiv(720,dpi,96),MulDiv(405,dpi,96),dpi);((MINMAXINFO*)lp)->ptMinTrackSize.x=s.cx;((MINMAXINFO*)lp)->ptMinTrackSize.y=s.cy;return 0;}
-    if(msg==WM_PAINT){PAINTSTRUCT ps;HDC dc=BeginPaint(window,&ps);void *pixels;HBITMAP bitmap=render(dc,&pixels);if(bitmap){HDC mem=CreateCompatibleDC(dc);HGDIOBJ old=SelectObject(mem,bitmap);BitBlt(dc,0,0,render_width,render_height,mem,0,0,SRCCOPY);SelectObject(mem,old);DeleteDC(mem);DeleteObject(bitmap);}EndPaint(window,&ps);return 0;}
+    if(msg==WM_PAINT){PAINTSTRUCT ps;HDC dc=BeginPaint(window,&ps);mo_paint(dc);EndPaint(window,&ps);return 0;}   /* render + animate (launcher_motion.h) */
     return DefWindowProcW(window,msg,wp,lp);
 }
 static int decoder_test(void){
@@ -1040,15 +1043,17 @@ static int validate_mdec_file(const wchar_t*path){
 }
 int WINAPI wWinMain(HINSTANCE instance,HINSTANCE previous,PWSTR line,int show){
     (void)previous;(void)line;dpi_setup();GetModuleFileNameW(NULL,appdir,32768);PathRemoveFileSpecW(appdir);
-    workspace[0]=0;
+    workspace[0]=0;double preview_fps=60;
     wchar_t base[32768];GetEnvironmentVariableW(L"LOCALAPPDATA",base,32768);join(store,base,L"RoadRashJailbreak");wcscpy(default_store,store);
-    int argc;wchar_t **argv=CommandLineToArgvW(GetCommandLineW(),&argc);const wchar_t *preview_path=NULL,*import_path=NULL,*mod_operation=NULL,*mod_value=NULL;int room_test=0,room_test_n=0;const wchar_t*room_test_code=NULL;int find_game=0,settings_only=0,play_on_start=0,setup_on_start=0,preview_voice=0,net_test=0,net_test_port=0,online_start_on=0,second_instance=0,show_launcher=0;const wchar_t*net_test_address=NULL;
+    int argc;wchar_t **argv=CommandLineToArgvW(GetCommandLineW(),&argc);const wchar_t *preview_path=NULL,*preview_motion=NULL,*import_path=NULL,*mod_operation=NULL,*mod_value=NULL;int room_test=0,room_test_n=0;const wchar_t*room_test_code=NULL;int find_game=0,settings_only=0,play_on_start=0,setup_on_start=0,preview_voice=0,net_test=0,net_test_port=0,online_start_on=0,second_instance=0,show_launcher=0;const wchar_t*net_test_address=NULL;
     for(int i=1;i<argc;i++){
         if(!wcscmp(argv[i],L"--self-test")){LocalFree(argv);return decoder_test();}
         if(!wcscmp(argv[i],L"--validate-mdec-file")&&i+1<argc){int code=validate_mdec_file(argv[++i]);LocalFree(argv);return code;}
         if(!wcscmp(argv[i],L"--data-root")&&i+1<argc){GetFullPathNameW(argv[++i],32768,store,NULL);data_root_given=1;}
         else if(!wcscmp(argv[i],L"--workspace")&&i+1<argc)GetFullPathNameW(argv[++i],32768,workspace,NULL);
         else if(!wcscmp(argv[i],L"--render-preview")&&i+1<argc){preview_path=argv[++i];preview_only=1;}
+        else if(!wcscmp(argv[i],L"--preview-motion")&&i+1<argc)preview_motion=argv[++i];   /* frames of a scripted visit (launcher_motion.h) */
+        else if(!wcscmp(argv[i],L"--preview-fps")&&i+1<argc){preview_fps=_wtof(argv[++i]);if(preview_fps<1||preview_fps>240)preview_fps=60;}
         else if(!wcscmp(argv[i],L"--preview-size")&&i+1<argc){int w=0,h=0;if(swscanf(argv[++i],L"%dx%d",&w,&h)!=2||w<320||h<180||w>7680||h>4320){LocalFree(argv);return 22;}render_width=w;render_height=h;}
         else if(!wcscmp(argv[i],L"--preview-pad")&&i+1<argc){i++;preview_pad=!wcscmp(argv[i],L"playstation");}
         else if(!wcscmp(argv[i],L"--import")&&i+1<argc)import_path=argv[++i];
@@ -1090,6 +1095,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE previous,PWSTR line,int show){
         FILE*f=_wfopen(path,L"wb");if(f){fputs(ok?"ok ":"failed ",f);utf8(f,ok?online_session:net_error);fputc('\n',f);fclose(f);}LocalFree(argv);return ok?0:31;}
     if(mod_operation){run_mod(mod_operation,mod_value);if(!builder){LocalFree(argv);return 17;}WaitForSingleObject(builder,120000);DWORD code=1;builder_exit(&code);CloseHandle(builder);LocalFree(argv);return code==STILL_ACTIVE?18:(int)code;}
     if(settings_only){if(!installed){LocalFree(argv);return 14;}int ok=write_runtime_settings();if(ok)save_settings();LocalFree(argv);return ok?0:20;}
+    if(preview_path&&preview_motion){int ok=mo_preview_run(preview_motion,preview_path,preview_fps);LocalFree(argv);return ok?0:11;}
     if(preview_path){HDC dc=GetDC(NULL);void *pixels;HBITMAP bmp=render(dc,&pixels);Image im={(unsigned)render_width,(unsigned)render_height,pixels};int ok=bmp&&save_bmp(preview_path,&im);if(bmp)DeleteObject(bmp);ReleaseDC(NULL,dc);LocalFree(argv);return ok?0:11;}
     /* The tuning file with every built-in value, so it can be found and edited;
        a broken one is announced (its problems keep their built-in values). */
@@ -1101,7 +1107,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE previous,PWSTR line,int show){
     /* Start-up: Straight to game, once set up (game imported, preset chosen, game built). */
     {wchar_t built[32768];join(built,store,L"runtime\\RoadRashNativeResearch.exe");
      if(start_game_directly&&installed&&preset_chosen&&exists(built)&&!show_launcher&&!(GetAsyncKeyState(VK_SHIFT)&0x8000)&&!play_on_start&&!setup_on_start&&!online_start_on&&!room_test&&page==0)quick_start=1;}
-    place_main_window();SetTimer(mainwindow,1,500,NULL);SetTimer(mainwindow,2,50,NULL);if(!quick_start){ShowWindow(mainwindow,show);UpdateWindow(mainwindow);}
+    place_main_window();SetTimer(mainwindow,1,500,NULL);SetTimer(mainwindow,2,50,NULL);SetTimer(mainwindow,4,6500,NULL);if(!quick_start){ShowWindow(mainwindow,show);UpdateWindow(mainwindow);}
     if(quick_start)play_game();
     {uintptr_t t=_beginthreadex(NULL,0,update_cleanup_worker,NULL,0,NULL);if(t)CloseHandle((HANDLE)t);}update_check_daily();   /* launcher_update.h */
     if(installed&&!preset_chosen&&!play_on_start&&page==0)open_page(SETUP_PAGE);   /* first run: choose a preset */

@@ -140,7 +140,8 @@ static const struct {const char*name;uint32_t rgb;} tags[]={{"Original",0},{"Whi
  * Lt Bull, Gr Jork, Gr Mongo). */
 static const struct {const char*name;unsigned char model,set,slot,profile;} outfits[]={{"Original",0,0,0,0},
  {"Kaffe Lieutenant",4,9,6,0x21},{"DeSades Lieutenant",3,12,10,0x20},{"Kaffe Grunt",4,10,4,0x51},{"DeSades Grunt",3,13,8,0x50},
- {"DeSades Captain",3,11,11,0x10},{"Kaffe Captain",4,8,7,0x11},{"Police",3,14,12,0x12}};
+ {"DeSades Captain",3,11,11,0x10},{"Kaffe Captain",4,8,7,0x11},{"Police",3,14,12,0x12},
+ {"Spaz",4,RR_SPAZ_SET,255,0}};   /* set RR_SPAZ_SET: Spaz's own texture and colours (rr_spaz_look) */
 /* Colours: one of the game's own rider palettes (BBLEVEL*.TEX PBNK, uploaded
  * into palette slots 0-28 of every race), copied into the player's slot.
  * Slots 4-12 are the gangs' and police colours, 14-28 schemes no rider in the
@@ -158,14 +159,30 @@ int rr_colour_slot(int v){return v>0&&v<rr_look_count(RR_LOOK_COLOUR)?colour_slo
  * palette, from the owner's BBLEVEL1.TEX (PBNK = 48 palettes of 128 colours
  * as a 384x16 image, slot k at row 15 - k/3, column k%3; LECT = one 128x60
  * 8-bit texture, id at +16, pixels at +568). */
-static void load_look_textures(Disc*d,Entry root){Entry e;if(!find_file(d,root,"/DATA/BBLEVEL1.TEX",&e)||e.size<0x3014||e.size>512*1024)return;free(look_tex);look_tex=read_entry(d,e);look_size=look_tex?e.size:0;
+/* Spaz (the Side Car passenger in his "4721" prison jumpsuit): his outfit is
+ * one LECT of the Jail Break texture files (id 151 in BBLEVJBD/JBK.TEX, not in
+ * BBLEVEL1-3), a 128x60 sheet for the Kaffe Boys body with its own 128 colours
+ * at LECT +0x2C (not a PBNK palette). Read from the owner's disc only. */
+static unsigned char spaz_tex[128*60];static uint16_t spaz_pal[128];static int spaz_ok;
+static void load_spaz(Disc*d,Entry root){Entry e;if(spaz_ok||!find_file(d,root,"/DATA/BBLEVJBD.TEX",&e)||e.size<0x3014||e.size>512*1024)return;unsigned char*b=read_entry(d,e);if(!b)return;
+ for(unsigned p=0x3014;p+568+128*60<=e.size;p++)if(!memcmp(b+p,"LECT",4)&&le32(b+p+4)==0x2038&&b[p+16]==RR_SPAZ_TEXTURE&&le16(b+p+18)==128&&le16(b+p+20)==60){
+  memcpy(spaz_tex,b+p+568,sizeof spaz_tex);for(int i=0;i<128;i++)spaz_pal[i]=(uint16_t)le16(b+p+0x2C+2*i);spaz_ok=1;for(int i=0;i<128*60;i++)if(spaz_tex[i]>127)spaz_ok=0;break;}
+ free(b);}
+int rr_spaz_look(const wchar_t*path,const unsigned char**tex,const uint16_t**pal){
+ static int tried;if(!spaz_ok&&!tried&&path){tried=1;Disc d={0};Entry root,e;unsigned char*b=NULL;char hash[65];int valid=0;
+  if(open_disc(path,&d,&root)&&find_file(&d,root,"/SLUS_010.53",&e)){b=read_entry(&d,e);valid=b&&sha256(b,e.size,hash)&&!strcmp(hash,"52a3e28b2f97e49d8122eb4f510041e64dce046fd8fa9d4cdc49f9e64ff66a7b");}free(b);
+  if(valid)load_spaz(&d,root);if(d.fp)fclose(d.fp);}
+ if(!spaz_ok)return 0;if(tex)*tex=spaz_tex;if(pal)*pal=spaz_pal;return 1;}
+static void load_look_textures(Disc*d,Entry root){Entry e;load_spaz(d,root);if(!find_file(d,root,"/DATA/BBLEVEL1.TEX",&e)||e.size<0x3014||e.size>512*1024)return;free(look_tex);look_tex=read_entry(d,e);look_size=look_tex?e.size:0;
  if(look_tex&&(memcmp(look_tex,"KNBP",4)||le32(look_tex+4)!=0x3014)){free(look_tex);look_tex=NULL;look_size=0;}}
 #include "rider_model.h"
 /* The 3D preview: the outfit's rider body, texture and colours on the bike in
  * its paint, turned yaw degrees; ss = supersampling. */
 int rr_look_preview3d(int outfit,int colour,int paint,double yaw,uint32_t*rgb,unsigned w,unsigned h,int ss){
  static const unsigned char set_ids[]={52,51,4,3,2,1,56};   /* texture sets 8-14 */
- int model=3,set=13,slot=8,profile=0;rr_outfit_look(outfit,&model,&set,&slot,&profile);int c=rr_colour_slot(colour);if(c>=0)slot=c;
+ int model=3,set=13,slot=8,profile=0;rr_outfit_look(outfit,&model,&set,&slot,&profile);
+ if(set==RR_SPAZ_SET){if(!spaz_ok)return 0;rm_tex_override=spaz_tex;rm_pal_override=spaz_pal;int ok=rm_render(1,0,0,rr_paint_hue(paint),yaw,rgb,w,h,ss);rm_tex_override=NULL;rm_pal_override=NULL;return ok;}
+ int c=rr_colour_slot(colour);if(c>=0)slot=c;
  if(set<8||set>14||slot<0||slot>28)return 0;
  return rm_render(model==4,set_ids[set-8],slot,rr_paint_hue(paint),yaw,rgb,w,h,ss);
 }

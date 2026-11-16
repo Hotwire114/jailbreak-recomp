@@ -319,7 +319,7 @@ static const wchar_t*native_help(void){
     if(page==6)return selected?L"Type a name of up to 8 characters.\nSaved on this PC.":enhanced_mode?L"Custom names appear in supported race HUD labels. Characters and saved profiles stay unchanged.":L"Names apply in Enhanced. Original keeps the game's own rider names.";
     if(page==7){const wchar_t*help[]={L"Resolution, textures, HD UI, aspect ratio, frame rate and level of detail.",L"Everything about your riders: names and taunt voices.\nAlso your achievements.",L"Music: the original soundtrack or your own WAV tracks.",L"Loading speed, intro movies, controls and start-up."};return help[selected];}
     if(page==8){const wchar_t*help[]={L"Both riders' names, shown in races.\nSaved on this PC.",L"Your taunts in another rider's voice.\nPlayer 1 and Player 2 pick separately.",L"Local achievements.\nSaved on this PC.",L"Bike paint, name tag colour and outfit.\nPlayer 1 and Player 2 pick separately."};return help[selected&3];}
-    if(page==15){const wchar_t*help[]={L"Your bike in another colour. Original keeps the game's paint.\nNot in Five-O races. Applies to Enhanced races.",L"The colour of your name under your health bars in races.\nNot in Five-O races. Applies to Enhanced races.",L"Ride as a gang member or police: DeSades or Kaffe Boys, Captain, Lieutenant or Grunt. Not in Jail Break, where your chosen character stays, and not in Five-O.\nApplies to Enhanced races.",L"Your rider in another colour scheme: the gangs' and police colours, or schemes no rider wears. Original keeps the outfit's own colours.\nNot in Five-O races. Applies to Enhanced races."};
+    if(page==15){const wchar_t*help[]={L"Your bike in another colour. Original keeps the game's paint.\nNot in Five-O races. Applies to Enhanced races.",L"The colour of your name under your health bars in races.\nNot in Five-O races. Applies to Enhanced races.",L"Ride as a gang member, police or Spaz (the Side Car passenger in his prison jumpsuit, with his own colours). Not in Jail Break, where your chosen character stays, and not in Five-O.\nApplies to Enhanced races.",L"Your rider in another colour scheme: the gangs' and police colours, or schemes no rider wears. Original keeps the outfit's own colours.\nNot in Five-O races. Applies to Enhanced races."};
         return selected>=2*RR_LOOK_KINDS?L"Both players back to their own paint, name tag, rider and colours.":help[(selected/2)%RR_LOOK_KINDS];}
     if(page==10){if(selected>=RR_ACH_COUNT){swprintf(text,600,L"%d of %d unlocked. Locks every achievement again and clears all progress (races, wins, riding time).\nThe old file is kept as achievements.ini.bak. Close the game first.",ach_unlocked_count(),RR_ACH_COUNT);return text;}
         /* The game menu's two short lines, joined into one sentence here. */
@@ -726,10 +726,12 @@ static void draw_header(void){
 /* Slider rows: steps, current step and recommended maximum. */
 static int dev_slider(int,int*,int*,int*);
 static int row_slider(int r,int*steps,int*pos,int*safe){if(IS_DEV(page))return dev_slider(r,steps,pos,safe);*steps=det_steps();*pos=model_detail;*safe=det_safe();return 1;}
+static int list_force=-1;   /* draw_list: -1 normal; 0 / 1 every row inactive / active (launcher_motion.h's glide layers) */
+static void mo_save_toast_base(void);static double mo_eased_progress(double);
 static void draw_list(void){
     list_scroll();arrow_row=-1;int n=row_count(),v=list_visible();double x=ui.cx+56,size=page==0?30:25;
     for(int i=list_first;i<n&&i<list_first+v;i++){
-        wchar_t label[160],value[160];int kind=launcher_row(i,label,value,160),active=i==selected;
+        wchar_t label[160],value[160];int kind=launcher_row(i,label,value,160),active=list_force<0?i==selected:list_force;
         double y=ui.by+list_top()+(i-list_first)*list_pitch(),h=list_height(),right=x+LIST_W-22,vw=0;
         draw_bar(x,y,LIST_W,h,active);
         uint32_t lc=active?C_WHITE:C_GOLD,vc=active?C_WHITE:C_STEEL;
@@ -820,7 +822,9 @@ static void draw_toast(void){
     text(status_text,x+20,y,w-40,h,17,FW_SEMIBOLD,C_GOLD,DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS);
     if(busy){const int known=busy==2&&build_percent>=0;const double bh=known?6:3;   /* the local build's bar: thicker, it runs for minutes */
         double by=y+h-bh,bw=w-4;fill(x+4,by,bw-4,bh,C_STEEL,50);
-        if(busy==1||known)fill(x+4,by,(bw-4)*(busy==1?progress:build_percent)/100.0,bh,C_GOLD,255);
+        if(busy==1||known){const double fw=(bw-4)*mo_eased_progress(busy==1?progress:build_percent)/100.0;fill(x+4,by,fw,bh,C_GOLD,255);
+            /* a soft light running along the filled part */
+            const double sw=fmin(90,fw),sx=x+4+(fw-sw)*((GetTickCount()%1800)/1800.0);if(sw>8){grad(sx,by,sw/2,bh,C_WHITE,C_WHITE,0,150,0);grad(sx+sw/2,by,sw/2,bh,C_WHITE,C_WHITE,150,0,0);}}
         else{double phase=(GetTickCount()%1600)/1600.0,seg=bw*.22,sx=x+4+(bw+seg)*phase-seg,ex=sx+seg;if(sx<x+4)sx=x+4;if(ex>x+bw)ex=x+bw;if(ex>sx)fill(sx,by,ex-sx,3,C_GOLD,255);}}
 }
 /* Before a validated game exists: our logo and one way forward. */
@@ -843,8 +847,8 @@ static HBITMAP render(HDC compatible,void**pixels){
     HDC dc=CreateCompatibleDC(compatible);if(!dc){DeleteObject(bitmap);return NULL;}HGDIOBJ old=SelectObject(dc,bitmap);
     ui_pick_face();ui.dc=dc;ui.s.px=*pixels;ui.s.w=w;ui.s.h=h;ui_layout(w,h);if(selected>=row_count())selected=row_count()?row_count()-1:0;
     draw_background();
-    if(!installed){draw_setup();draw_toast();}
-    else{draw_header();draw_list();draw_card();draw_toast();draw_footer();}
+    if(!installed){draw_setup();mo_save_toast_base();draw_toast();}
+    else{draw_header();draw_list();draw_card();mo_save_toast_base();draw_toast();draw_footer();}
     GdiFlush();SelectObject(dc,old);DeleteDC(dc);ui.dc=NULL;return bitmap;
 }
 #include "save_browser.h"

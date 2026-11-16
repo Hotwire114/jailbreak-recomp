@@ -194,28 +194,52 @@ extern "C" int rr_ui_text_filter(void){
 namespace {
 // fill/ring: CLUT indices of a pixel-art glyph's fill and outline (HUD digits);
 // -1: an anti-aliased font glyph, measured from its level ramp.
-struct HdGlyph{int px,py,cx,cy,u,v,w,h;char ch;int fill,ring;uint64_t key;};
+// u,v,w,h: the box the letter is fitted to and drawn in. Usually the box the
+// primitive samples; a letter that is part of a larger picture (the nitro "N"
+// in the speed panel) is keyed by the picture's box (kx..kh) and drawn in its
+// own sub-box over the CLUT colour bg (-1: none); the rest of the picture keeps
+// the HD UI smoothing (atlas marker, rr_text_sdf_build).
+struct HdGlyph{int px,py,cx,cy,u,v,w,h;char ch;int fill,ring,bg;uint64_t key;};
+// Shapes drawn in code instead of a font letter (ch below RR_HD_FIRST).
+enum:char{RR_HD_BALL=1,RR_HD_HOOP=2};
 struct PageKind{int px,py,cx,cy;bool outlined;};
-std::mutex hd_mu;                       // the glyph list and page kinds
+// Pixel-art CLUTs of one page share one atlas (their glyph boxes do not
+// overlap and their colours come from each primitive's own CLUT): the
+// renderer keeps four atlases, so the HUD's art takes one, not one per CLUT.
+struct ArtClut{int px,py,cx,cy,ax,ay;};
+std::mutex hd_mu;                       // the glyph list, page kinds and art CLUTs
 std::vector<HdGlyph> hd_glyphs;         // append only
 std::vector<uint64_t> hd_keys;          // sorted: one entry per learned box
 std::vector<PageKind> page_kinds;
+std::vector<ArtClut> art_cluts;
 std::atomic<uint32_t> hd_count{0};
 std::atomic<uint32_t> hd_pages{0};      // bit per texture page (GP0 page bits 0-4) with paired boxes
 }
 static uint64_t hd_key(int tp,int clut,int u,int v,int w,int h){
  return (uint64_t)(tp&0x1f)|(uint64_t)(clut&0xffff)<<5|(uint64_t)u<<21|(uint64_t)v<<29|(uint64_t)w<<37|(uint64_t)h<<45;
 }
-static void hd_add(int tp,int clut,int u,int v,int w,int h,char ch,int fill,int ring){   // hd_mu held
- const uint64_t key=hd_key(tp,clut,u,v,w,h);
+// The atlas CLUT of a page's pixel art: the first art CLUT listed for it.
+static void art_atlas(int px,int py,int cx,int cy,int*ax,int*ay){   // hd_mu held
+ for(const auto&a:art_cluts)if(a.px==px&&a.py==py&&a.cx==cx&&a.cy==cy){*ax=a.ax;*ay=a.ay;return;}
+ *ax=cx;*ay=cy;
+ for(const auto&a:art_cluts)if(a.px==px&&a.py==py){*ax=a.ax;*ay=a.ay;break;}
+ art_cluts.push_back({px,py,cx,cy,*ax,*ay});
+}
+// ku..kh: the box the primitive samples (the key); u..h: where the letter is
+// drawn (the same box unless the letter is part of a larger picture).
+static void hd_add_in(int tp,int clut,int ku,int kv,int kw,int kh,int u,int v,int w,int h,char ch,int fill,int ring,int bg){   // hd_mu held
+ const uint64_t key=hd_key(tp,clut,ku,kv,kw,kh);
  auto at=std::lower_bound(hd_keys.begin(),hd_keys.end(),key);
  if(at!=hd_keys.end()&&*at==key)return;
  hd_keys.insert(at,key);
- hd_glyphs.push_back({(tp&15)*64,((tp>>4)&1)*256,(clut&63)*16,(clut>>6)&511,u,v,w,h,ch,fill,ring,key});
+ const int px=(tp&15)*64,py=((tp>>4)&1)*256;int cx=(clut&63)*16,cy=(clut>>6)&511;
+ if(fill>=0)art_atlas(px,py,cx,cy,&cx,&cy);
+ hd_glyphs.push_back({px,py,cx,cy,u,v,w,h,ch,fill,ring,bg,key});
  hd_pages.fetch_or(1u<<(tp&0x1f));
  hd_count.store((uint32_t)hd_glyphs.size());
  if(std::getenv("RR_FONT_TRACE"))std::fprintf(stderr,"HD glyph '%c' page %d,%d clut %d,%d box %d,%d %dx%d\n",ch,(tp&15)*64,((tp>>4)&1)*256,(clut&63)*16,(clut>>6)&511,u,v,w,h);
 }
+static void hd_add(int tp,int clut,int u,int v,int w,int h,char ch,int fill,int ring){hd_add_in(tp,clut,u,v,w,h,u,v,w,h,ch,fill,ring,-1);}
 // The race HUD's numbers (speed, position, lap) are pixel-art sprites from two
 // digit strips on page 960,0, not drawn by the text routine: white fill (CLUT
 // index 0) with a black outline (index 1) for the large digits, white only for
@@ -227,6 +251,19 @@ static void seed_hud(){   // hd_mu held
  const char*digits="1234567890";
  for(int i=0;i<10;i++){hd_add(tp,big,12*i,94,12,16,digits[i],0,1);hd_add(tp,small,48+6*i,112,6,9,digits[i],0,-1);}
  hd_add(tp,small,108,112,6,9,'/',0,-1);hd_add(tp,small,119,112,2,9,'.',0,-1);
+ // The clocks' separator (Time Trial, Five-O: 00:07:3): the 8 x 16 box after
+ // the large strip's 0, drawn like the digits beside it.
+ hd_add(tp,big,120,94,8,16,':',0,1);
+ // Nitro: the red "N" (CLUT index 0) in the speed panel (a 68 x 32 sprite at
+ // 188,0, CLUT 960,154, one per player), on the panel's grey (index 2). The
+ // letter's sub-box 190,22 11 x 9 holds only the N and grey; the panel's frame
+ // and lines outside it keep the HD UI smoothing.
+ hd_add_in(tp,(154<<6)|(960>>4),188,0,68,32,190,22,11,9,'N',0,-1,2);
+ // Nitro circles after the N (one per nitro; ranks above Grunt start with
+ // some): 4 x 5 sprites, CLUT 960,155, outline index 7. 20,52 is a full nitro
+ // (a shaded red ball), 16,52 the empty outline beside it.
+ const int nitro=(155<<6)|(960>>4);
+ hd_add(tp,nitro,20,52,4,5,RR_HD_BALL,3,7);hd_add(tp,nitro,16,52,4,5,RR_HD_HOOP,7,7);
  // Race start countdown: 3, 2, 1 as 17-18 x 21 sprites on the same page (CLUT
  // 960,151, an anti-aliased level ramp with a dark rim), drawn mid-screen.
  const int count=(151<<6)|(960>>4);
@@ -268,8 +305,19 @@ extern "C" int rr_text_hd_known(int tpage,int clut,int u,int v,int w,int h){
  std::lock_guard<std::mutex> lock(hd_mu);
  return std::binary_search(hd_keys.begin(),hd_keys.end(),key);
 }
+// The atlas a primitive's page and CLUT use (gpu_presentation.py
+// rr_text_filter): a pixel-art CLUT maps to its page's shared art atlas.
+extern "C" void rr_text_atlas_clut(int px,int py,int*cx,int*cy){
+ ensure_seed();
+ std::lock_guard<std::mutex> lock(hd_mu);
+ for(const auto&a:art_cluts)if(a.px==px&&a.py==py&&a.cx==*cx&&a.cy==*cy){*cx=a.ax;*cy=a.ay;return;}
+}
 // A page whose CLUT is not a level ramp (the HUD digits') still gets an atlas
-// when HD glyphs are listed for it: empty, so only those boxes draw.
+// when HD glyphs are listed for it: only those boxes draw HD; every other texel
+// holds the marker G bit 5 (the GPU keeps its HD UI smoothing there, for the
+// parts of a listed picture outside its letter) with distance -2 (outside), so
+// glyph box edges fade out as before. A letter inside a picture marks one texel
+// around its sub-box as covered (B 255, rr_text_hd_apply), so no seam shows.
 static bool hd_listed(int px,int py,int cx,int cy){
  std::lock_guard<std::mutex> lock(hd_mu);
  for(const auto&g:hd_glyphs)if(g.px==px&&g.py==py&&g.cx==cx&&g.cy==cy&&g.fill>=0)return true;
@@ -323,7 +371,8 @@ extern "C" int rr_text_sdf_build(const uint16_t*vram,int px,int py,int cx,int cy
  for(int i=1;i<16;i++)if(!clut[i]||L[i]<L[i-1])ramp=false;
  if(!ramp){
   if(!hd_listed(px,py,cx,cy))return 0;
-  std::memset(out,0,(size_t)FW*FW*4);   // distance -2: nothing outside the listed boxes
+  const uint8_t plain[4]={0,0x20,0,0};   // R/B distance -2, G 0x20 (marker)
+  for(size_t o=0;o<(size_t)FW*FW;o++)std::memcpy(out+o*4,plain,4);
   return 1;
  }
  for(int i=0;i<16;i++)L[i]/=L[15];
@@ -464,6 +513,28 @@ extern "C" int rr_text_hd_apply(const uint16_t*vram,int px,int py,int cx,int cy,
  rect[0]=rect[1]=FW;rect[2]=rect[3]=0;int drawn=0;
  std::vector<float> rows,cols;std::vector<SdfPt> pts;std::vector<int> starts;std::vector<float> xs;std::vector<uint64_t> failed;
  for(const auto&g:todo){
+  // Nitro circles (pixel-art balls, not letters): an ellipse filling the box,
+  // the outline (ring index) 0.7 texel wide. RR_HD_BALL: the fill is shaded
+  // like the original (lit from the upper left: highlight index 5, then 3, 2
+  // and the darkest 0 towards the lower right); RR_HD_HOOP: outline only.
+  if(g.ch==RR_HD_BALL||g.ch==RR_HD_HOOP){
+   const float cx0=g.u+0.5f*g.w,cy0=g.v+0.5f*g.h,ax=0.5f*g.w,ay=0.5f*g.h,W=0.7f;
+   const int fx0=g.u*K,fy0=g.v*K,fx1=std::min(FW,(g.u+g.w)*K),fy1=std::min(FW,(g.v+g.h)*K);
+   for(int fy=fy0;fy<fy1;fy++)for(int fx=fx0;fx<fx1;fx++){
+    const float xc=(fx+0.5f)/K-cx0,yc=(fy+0.5f)/K-cy0;
+    const float outer=(1.0f-std::sqrt(xc*xc/(ax*ax)+yc*yc/(ay*ay)))*std::min(ax,ay);
+    const float bx=ax-W,by=ay-W,inner=(1.0f-std::sqrt(xc*xc/(bx*bx)+yc*yc/(by*by)))*std::min(bx,by);
+    int idx=g.ring;float fill=inner;
+    if(g.ch==RR_HD_HOOP)fill=std::min(outer,-inner);   // the outline band itself, in the outline colour
+    else{
+     const float t=0.5f*(xc/ax+yc/ay),hx=xc+0.35f*ax,hy=yc+0.35f*ay;
+     idx=hx*hx+hy*hy<0.12f*ax*ay?5:t<0.1f?3:t<0.5f?2:0;
+    }
+    uint8_t*o=out+((size_t)fy*FW+fx)*4;o[0]=enc(fill);o[1]=(uint8_t)(idx|0x40);o[2]=enc(outer);o[3]=(uint8_t)g.ring;
+   }
+   rect[0]=std::min(rect[0],fx0);rect[1]=std::min(rect[1],fy0);rect[2]=std::max(rect[2],fx1);rect[3]=std::max(rect[3],fy1);drawn++;
+   continue;
+  }
   // The original letter's fill: its level profile across rows and columns
   // (pixel-art digits: where the fill index is), its fill and ring levels.
   const bool art=g.fill>=0;
@@ -475,12 +546,15 @@ extern "C" int rr_text_hd_apply(const uint16_t*vram,int px,int py,int cx,int cy,
    if(m<3||L[m]<=0){failed.push_back(g.key);continue;}
    thr=(outlined?0.7f:0.5f)*L[m];ringl=std::max(1,outlined?(7*m+7)/15:m/7);
   }
+  // A letter inside a picture: the rest of its sub-box is the picture's colour
+  // bg. It is upright and bold like the original: the black style.
+  const bool boxed=art&&g.bg>=0;if(boxed){ringl=g.bg;style=2;}
   rows.assign(g.h,0.0f);cols.assign(g.w,0.0f);
   for(int v=0;v<g.h;v++)for(int u=0;u<g.w;u++){const int k=level(g.u+u,g.v+v);const float l=art?(k==g.fill?1.0f:0.0f):L[k];rows[v]=std::max(rows[v],l);cols[u]=std::max(cols[u],l);}
   auto first=[&](const std::vector<float>&p){for(int i=0;i<(int)p.size();i++)if(p[i]>=thr){const float a=i?p[i-1]:0.0f;return i-0.5f+(thr-a)/std::max(p[i]-a,1e-6f);}return -1.0f;};
   auto last=[&](const std::vector<float>&p){for(int i=(int)p.size()-1;i>=0;i--)if(p[i]>=thr){const float b=i+1<(int)p.size()?p[i+1]:0.0f;return i+0.5f+(p[i]-thr)/std::max(p[i]-b,1e-6f);}return -1.0f;};
   const float top=first(rows),bottom=last(rows),left=first(cols),right=last(cols);
-  if(top<0||bottom<=top||right<=left){failed.push_back(g.key);continue;}
+  if(top<0||bottom<=top||right<=left){failed.push_back(g.key);if(std::getenv("RR_FONT_TRACE"))std::fprintf(stderr,"HD glyph '%c' at %d,%d: no letter, original kept\n",g.ch,g.u,g.v);continue;}
   // The Roboto Flex letter, in 1/1024 em.
   const int16_t*d=rr_hd_data+rr_hd_index[style][g.ch-RR_HD_FIRST];const int nc=*d++;
   pts.clear();starts.clear();
@@ -511,10 +585,15 @@ extern "C" int rr_text_hd_apply(const uint16_t*vram,int px,int py,int cx,int cy,
      const float ex=xc-a.x-t*dx,ey=yc-a.y-t*dy;best=std::min(best,ex*ex+ey*ey);}
     const bool in=(std::lower_bound(xs.begin(),xs.end(),xc)-xs.begin())&1;
     const float dist=in?std::sqrt(best):-std::sqrt(best);
-    uint8_t*o=out+((size_t)fy*FW+fx)*4;o[0]=enc(dist);o[1]=gl;o[2]=enc(dist+edge);o[3]=ring;
+    uint8_t*o=out+((size_t)fy*FW+fx)*4;o[0]=enc(dist);o[1]=gl;o[2]=boxed?255:enc(dist+edge);o[3]=ring;
    }
   }
-  rect[0]=std::min(rect[0],fx0);rect[1]=std::min(rect[1],fy0);rect[2]=std::max(rect[2],fx1);rect[3]=std::max(rect[3],fy1);drawn++;
+  int ax0=fx0,ay0=fy0,ax1=fx1,ay1=fy1;
+  if(boxed){   // one texel of the picture around the sub-box reads as covered (the GPU draws it smoothed)
+   ax0=std::max(0,fx0-K);ay0=std::max(0,fy0-K);ax1=std::min(FW,fx1+K);ay1=std::min(FW,fy1+K);
+   for(int fy=ay0;fy<ay1;fy++)for(int fx=ax0;fx<ax1;fx++){uint8_t*o=out+((size_t)fy*FW+fx)*4;if(o[1]==0x20)o[2]=255;}
+  }
+  rect[0]=std::min(rect[0],ax0);rect[1]=std::min(rect[1],ay0);rect[2]=std::max(rect[2],ax1);rect[3]=std::max(rect[3],ay1);drawn++;
  }
  if(!failed.empty()){   // boxes that hold no letter here keep the game's own drawing
   std::lock_guard<std::mutex> lock(hd_mu);

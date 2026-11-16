@@ -52,6 +52,12 @@ uint32_t rr_tag_rgb(int value);       /* 0xRRGGBB, 0 = original */
 /* An outfit's race model table entry, texture set, the rank's palette slot and a
  * rider profile id of that rank (whose build is used when one is in the race); 0 = original. */
 int rr_outfit_look(int value,int *model,int *set,int *slot,int *profile);
+/* Spaz's outfit (outfit set RR_SPAZ_SET): his 128x60 jumpsuit sheet (LECT 151 of
+ * the Jail Break textures, Kaffe Boys body) and its 128 colours, from the
+ * owner's disc. Returns 0 when the disc or the texture is not available. */
+#define RR_SPAZ_SET 99
+#define RR_SPAZ_TEXTURE 151
+int rr_spaz_look(const wchar_t *disc,const unsigned char **tex,const uint16_t **pal);
 int rr_colour_slot(int value);        /* the race palette slot (0-28) copied to the player, -1 = original */
 /* The outfit's texture sheet in the chosen colours, fitted into w x h 0xAARRGGBB; 0 if unavailable. */
 int rr_look_preview(int outfit,int colour,uint32_t *rgb,unsigned w,unsigned h);

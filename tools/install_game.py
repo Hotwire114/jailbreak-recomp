@@ -271,7 +271,11 @@ default_enabled=true
     # --fresh: a build folder from an older release keeps that release's option defaults otherwise
     # (1.0's RR_TEXTURE_CORRECTION_FULL=OFF left upgraders without Precise vertices and with a
     # different game from everyone else). Objects whose commands did not change are still reused.
-    configure=[toolbin/'cmake.exe','--fresh','-S',source,'-G','Ninja','-DCMAKE_BUILD_TYPE=Release','-DCMAKE_C_COMPILER='+str(toolbin/'clang.exe'),'-DCMAKE_CXX_COMPILER='+str(toolbin/'clang++.exe'),'-DPSXRECOMP_ROOT='+str(framework),'-DRR_PRIVATE_ROOT='+str(private),'-DPSX_DEPS_OFFLINE=ON','-DPython3_EXECUTABLE='+sys.executable,'-DRR_THINLTO='+lto,'-DRR_LINK_JOBS='+str(jobs),*pgo_args]
+    # PSX_ENABLE_VULKAN=OFF: the game draws with OpenGL only. With the option's default (ON) a PC
+    # that has the Vulkan SDK installed tried to build the Vulkan shaders, which needs a Python on
+    # PATH, and setup stopped at "Vulkan shader embedding requires Python 3" (GitHub issue 4);
+    # every other PC got the inert stub this asks for. PSX_PYTHON: ours, for any other build tool.
+    configure=[toolbin/'cmake.exe','--fresh','-S',source,'-G','Ninja','-DCMAKE_BUILD_TYPE=Release','-DCMAKE_C_COMPILER='+str(toolbin/'clang.exe'),'-DCMAKE_CXX_COMPILER='+str(toolbin/'clang++.exe'),'-DPSXRECOMP_ROOT='+str(framework),'-DRR_PRIVATE_ROOT='+str(private),'-DPSX_DEPS_OFFLINE=ON','-DPython3_EXECUTABLE='+sys.executable,'-DPSX_PYTHON='+sys.executable,'-DPSX_ENABLE_VULKAN=OFF','-DRR_THINLTO='+lto,'-DRR_LINK_JOBS='+str(jobs),*pgo_args]
     online=threading.Thread(target=build_online,args=(configure,toolbin,framework,env))
     try:progress=Progress([(build,'offline',None)]+([(store/'runtime-netplay-build','online',online)] if args.netplay_libs else []),2*EACH if args.netplay_libs else JOBS,label)
     except (OSError,ValueError,KeyError):progress=None   # no reference times: the launcher's moving bar

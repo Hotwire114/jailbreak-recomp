@@ -321,13 +321,18 @@ static int rr_banner_filter(uint16_t texpage, const int *us, const int *vs, cons
     return s_rr_ban.ok ? 7 : 0;
 }
 /* Filter for lettering tagged by native_ui: 6 | slot << 5 when its 4-bit page
- * traces as a coverage font, otherwise the HD UI mode. */
+ * traces as a coverage font, otherwise the HD UI mode. Pixel-art CLUTs of one
+ * page (the HUD's digits and panel) share one atlas (rr_text_atlas_clut). */
+extern void rr_text_atlas_clut(int px, int py, int *cx, int *cy);
 static int rr_text_filter(uint16_t texpage, int cx, int cy) {
     const int f = rr_ui_text_filter();
     if (f != 6) return f;
     if (((texpage >> 7) & 3) != 0) return rr_ui_texture_filter();
     flush_cpu_upload();   /* pending uploads mark the page stale first */
-    const int s = rr_sdf_slot((texpage & 15) * 64, ((texpage >> 4) & 1) * 256, cx & 1008, cy & 511);
+    const int px = (texpage & 15) * 64, py = ((texpage >> 4) & 1) * 256;
+    cx &= 1008; cy &= 511;
+    rr_text_atlas_clut(px, py, &cx, &cy);
+    const int s = rr_sdf_slot(px, py, cx, cy);
     return s < 0 ? rr_ui_texture_filter() : 6 | (s << 5);
 }
 '''
@@ -778,6 +783,14 @@ float rr_cov = 1.0;           /* traced lettering edge coverage, blended in the 
  * is cut hard at its centre. The sample clamps to the glyph's own texel box
  * and needs a glyph texel of this primitive around it, so a neighbouring glyph
  * in the page never shows. Colours come from the primitive's own CLUT. */
+/* G bit 5: no HD letter at this texel of a pixel-art atlas (the part of a
+ * listed picture outside its letter): the HD UI smoothing draws it. */
+bool rr_sdf_plain(vec2 uv){
+  int slot = (v_filter >> 5) & 3;
+  vec2 q = clamp(uv, vec2(v_limits.xy), vec2(v_limits.zw) + 0.999);
+  vec2 f = vec2(float(slot & 1), float(slot >> 1)) * 1024.0 + q * 4.0;
+  return (int(texelFetch(u_rr_sdf, ivec2(floor(f)), 0).g * 255.0 + 0.5) & 32) != 0;
+}
 vec4 rr_text_sdf(vec2 uv, float px, out int stp){
   stp = 0; rr_cov = 1.0;
   int slot = (v_filter >> 5) & 3;
@@ -843,7 +856,7 @@ HD_UI_BRANCH = r'''
       stp = (raw >> 15) & 1;
       rgb = rr_cubic(uv, raw);
     } else if (fwm < 0.75) {
-      vec4 xr = fmode == 6 ? ((v_twin & 1023) == 0 ? rr_text_sdf(uv, fwm, stp) : rr_cubic_a(uv, raw, stp))
+      vec4 xr = fmode == 6 ? ((v_twin & 1023) == 0 && !rr_sdf_plain(uv) ? rr_text_sdf(uv, fwm, stp) : rr_cubic_a(uv, raw, stp))
               : fmode == 5 ? rr_text_vec(uv, raw, stp) : fmode == 4 ? rr_cubic_a(uv, raw, stp) : rr_xbr2(uv, fwm, raw, stp);
       if (xr.a < 0.5) discard;
       rgb = xr.rgb;

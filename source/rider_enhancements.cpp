@@ -338,10 +338,44 @@ static bool palette_xy(unsigned k,unsigned players,int&x,int&y,unsigned&m){
 //  is in the race. Colours: the chosen palette slot's colours (the outfit's own
 //  rank colours by default) are copied into the player's own palette slot, so
 //  no AI rider changes; the player's original colours come back with Original.
+//  Spaz (outfit set RR_SPAZ_SET, owner_assets.c rr_spaz_look): the Side Car
+//  passenger's jumpsuit sheet (LECT 151) is loaded only with the Jail Break
+//  texture files. When a race has it, the game's own texture table entry is
+//  used. Otherwise the sheet goes from the owner's disc into the fourth slot of
+//  texture page 0x9E (x 896, y 436, 64x60 words; empty in every race and menu
+//  VRAM dump checked, and written only while it is empty or already holds the
+//  sheet) and the unused table entry 19 (id 255) points at it. His own 128
+//  colours go into the player's palette slot, so the Colours row does not apply.
+static const wchar_t*disc_path(){
+    static wchar_t path[32768];if(!path[0]){wchar_t exe[32768];DWORD n=GetModuleFileNameW(nullptr,exe,32768);wchar_t*s=n?wcsrchr(exe,L'\\'):nullptr;if(!s)return nullptr;wcscpy(s+1,L"..\\game-disc.bin");GetFullPathNameW(exe,32768,path,nullptr);}
+    return path;
+}
+static int spaz_set(){
+    const uint32_t table=word(0x8005B2E4);if(!range(table,34*12))return -1;
+    for(unsigned i=0;i<34;i++)if(i!=19&&byte_at(table+i*12)==RR_SPAZ_TEXTURE)return (int)i;
+    const unsigned char*tex;const uint16_t*pal;if(!rr_spaz_look(disc_path(),&tex,&pal)){psx_mod_counter_add("rr.look.spaz_no_disc",1);return -1;}
+    const uint32_t e=table+19*12,e18=table+18*12;const int X=896,Y=436;
+    if(byte_at(e)!=0xFF&&byte_at(e)!=RR_SPAZ_TEXTURE){psx_mod_counter_add("rr.look.spaz_no_entry",1);return -1;}
+    bool ours=true,empty=true;
+    for(int y=0;y<60&&(ours||empty);y++)for(int x=0;x<64;x++){const uint16_t v=gpu_vram_peek_cpu(X+x,Y+y),want=(uint16_t)(tex[y*128+2*x]|tex[y*128+2*x+1]<<8);if(v!=want)ours=false;if(v)empty=false;}
+    if(!ours){
+        if(!empty){psx_mod_counter_add("rr.look.spaz_no_room",1);return -1;}
+        gpu_write_gp0(0xA0000000u);gpu_write_gp0((uint32_t)Y<<16|(uint32_t)X);gpu_write_gp0(60u<<16|64u);
+        for(int i=0;i<128*60;i+=4)gpu_write_gp0((uint32_t)tex[i]|(uint32_t)tex[i+1]<<8|(uint32_t)tex[i+2]<<16|(uint32_t)tex[i+3]<<24);
+        psx_mod_counter_add("rr.look.spaz_uploads",1);
+        if(rrpc::netplay()&&gl_renderer_cpu_auth_dual())gl_renderer_restage_vram_after_savestate();
+    }
+    // As the game's entries for page 0x9E: id, slot in page, u, v, 0, VRAM x, tpage, and entry 18's last word.
+    const uint8_t want[12]={RR_SPAZ_TEXTURE,3,0,180,0,0,0x80,0x03,0x9E,0x00,byte_at(e18+10),byte_at(e18+11)};
+    for(unsigned i=0;i<12;i++)if(byte_at(e+i)!=want[i])psx_mod_write_byte(e+i,want[i]);
+    return 19;
+}
 static void dress_rider(uint32_t rec,unsigned players,unsigned seat,int outfit,int colour){
     uint32_t base=word(0x8005B3A0),rider=word(rec+0x38);if(!range(rider,0x64)||!range(base,16*0x448))return;
     uint32_t r24=word(rider+0x24);if(!(r24&0x400)||(r24&0x800))return;
-    int model=0,set=0,slot=-1,profile=0;const bool dressed=rr_outfit_look(outfit,&model,&set,&slot,&profile)!=0;bool changed=false;
+    int model=0,set=0,slot=-1,profile=0;bool dressed=rr_outfit_look(outfit,&model,&set,&slot,&profile)!=0,changed=false;
+    const uint16_t*spaz_pal=nullptr;
+    if(dressed&&set==RR_SPAZ_SET){set=spaz_set();if(set<0||!rr_spaz_look(disc_path(),nullptr,&spaz_pal))dressed=false,spaz_pal=nullptr,slot=-1;}
     // The rider as the race set it up (model, texture set, build), noted before
     // any outfit: Original puts it back (the showroom steps through Original).
     struct Own{uint32_t rec,rider,desc,build;uint16_t set;bool valid;};static Own own[2];Own&o0=own[seat&1];
@@ -370,7 +404,8 @@ static void dress_rider(uint32_t rec,unsigned players,unsigned seat,int outfit,i
     int dx,dy,sx,sy;unsigned m,m2;if(!palette_xy(r24>>12&63,players,dx,dy,m))return;
     Kept&k=kept[seat&1];uint16_t now[128],want[128];for(unsigned i=0;i<m;i++)now[i]=gpu_vram_peek_cpu(dx+(int)i,dy);
     if(!k.valid||k.rec!=rec||k.x!=dx||k.y!=dy){k.rec=rec;k.x=dx;k.y=dy;std::memcpy(k.original,now,m*2);k.valid=true;}   // a new race: its own colours
-    if(source>=0){if(!palette_xy((unsigned)source,players,sx,sy,m2)||m2!=m)return;for(unsigned i=0;i<m;i++)want[i]=gpu_vram_peek_cpu(sx+(int)i,sy);}
+    if(spaz_pal)std::memcpy(want,spaz_pal,m*2);
+    else if(source>=0){if(!palette_xy((unsigned)source,players,sx,sy,m2)||m2!=m)return;for(unsigned i=0;i<m;i++)want[i]=gpu_vram_peek_cpu(sx+(int)i,sy);}
     else std::memcpy(want,k.original,m*2);
     if(!std::memcmp(now,want,m*2))return;
     gpu_write_gp0(0xA0000000u);gpu_write_gp0((uint32_t)dy<<16|(uint32_t)dx);gpu_write_gp0(1u<<16|m);
