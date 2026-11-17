@@ -18,14 +18,22 @@ parser.add_argument('--force-compile',action='store_true')
 # The online game's libraries (recomp-net, rbengine), unpacked and verified by setup_game.py from
 # recipe/netplay.json. Without it only the offline game is built (online stays greyed out).
 parser.add_argument('--netplay-libs',type=pathlib.Path)
-args=parser.parse_args();store=args.data_root.resolve();workspace=args.workspace.resolve()
+import setup_report
+args=parser.parse_args()
+# resolve() spells a folder's short name out in full again; the build steps need the plain form
+# (setup_report.plain_path: non-English letters break CMake's batch steps, GitHub issue 5).
+store=setup_report.plain_path(args.data_root.resolve()) or args.data_root.resolve()
+workspace=setup_report.plain_path(args.workspace.resolve()) or args.workspace.resolve()
+PYTHON=str(setup_report.plain_path(sys.executable) or sys.executable)
 package=pathlib.Path(__file__).resolve().parent.parent
 store.mkdir(parents=True,exist_ok=True)
 log=(store/'build.log').open('w',encoding='utf-8',buffering=1)
 def say(message):log.write(message+'\n');print(message,flush=True)
+STEP=['starting']   # the step a failure is reported against (setup_report.failure)
 def status(message):
-    say(message)
+    say(message);STEP[0]=message.split(':')[0].split(' (')[0]
     (store/'build-status.txt').write_text(message,encoding='utf-8')
+say(setup_report.header('install_game.py',package,store,workspace))
 def digest(path):
     with path.open('rb') as f:return hashlib.file_digest(f,'sha256').hexdigest()
 def toml_path(path):return json.dumps(path.resolve().as_posix())
@@ -39,7 +47,11 @@ def no_future_times(*roots):
 def run(command,cwd=None,env=None,out=None):
     say('Running '+pathlib.Path(str(command[0])).name)
     result=subprocess.run([str(x) for x in command],cwd=cwd,env=env,stdout=out or log,stderr=subprocess.STDOUT)
-    if result.returncode:raise RuntimeError('Local build failed; see '+pathlib.Path((out or log).name).name+'.')
+    if result.returncode:
+        name=pathlib.Path((out or log).name).name
+        # The tool's own last lines say why (a missing file, a compiler error); repeat them here.
+        say(setup_report.tool_failed(pathlib.Path(str(command[0])).name,result.returncode,STEP[0],pathlib.Path((out or log).name)))
+        raise RuntimeError(f'{pathlib.Path(str(command[0])).name} failed (exit {result.returncode}) during "{STEP[0]}"; see {name}.')
 def build_jobs():
     """Parallel compile and link jobs: one per CPU thread (one left for the PC), with 0.75 GB of
     available memory each (eight jobs measured about 4 GB in all), never fewer than two. The
@@ -275,7 +287,7 @@ default_enabled=true
     # that has the Vulkan SDK installed tried to build the Vulkan shaders, which needs a Python on
     # PATH, and setup stopped at "Vulkan shader embedding requires Python 3" (GitHub issue 4);
     # every other PC got the inert stub this asks for. PSX_PYTHON: ours, for any other build tool.
-    configure=[toolbin/'cmake.exe','--fresh','-S',source,'-G','Ninja','-DCMAKE_BUILD_TYPE=Release','-DCMAKE_C_COMPILER='+str(toolbin/'clang.exe'),'-DCMAKE_CXX_COMPILER='+str(toolbin/'clang++.exe'),'-DPSXRECOMP_ROOT='+str(framework),'-DRR_PRIVATE_ROOT='+str(private),'-DPSX_DEPS_OFFLINE=ON','-DPython3_EXECUTABLE='+sys.executable,'-DPSX_PYTHON='+sys.executable,'-DPSX_ENABLE_VULKAN=OFF','-DRR_THINLTO='+lto,'-DRR_LINK_JOBS='+str(jobs),*pgo_args]
+    configure=[toolbin/'cmake.exe','--fresh','-S',source,'-G','Ninja','-DCMAKE_BUILD_TYPE=Release','-DCMAKE_C_COMPILER='+str(toolbin/'clang.exe'),'-DCMAKE_CXX_COMPILER='+str(toolbin/'clang++.exe'),'-DPSXRECOMP_ROOT='+str(framework),'-DRR_PRIVATE_ROOT='+str(private),'-DPSX_DEPS_OFFLINE=ON','-DPython3_EXECUTABLE='+PYTHON,'-DPSX_PYTHON='+PYTHON,'-DPSX_ENABLE_VULKAN=OFF','-DRR_THINLTO='+lto,'-DRR_LINK_JOBS='+str(jobs),*pgo_args]
     online=threading.Thread(target=build_online,args=(configure,toolbin,framework,env))
     try:progress=Progress([(build,'offline',None)]+([(store/'runtime-netplay-build','online',online)] if args.netplay_libs else []),2*EACH if args.netplay_libs else JOBS,label)
     except (OSError,ValueError,KeyError):progress=None   # no reference times: the launcher's moving bar
@@ -305,7 +317,7 @@ def build_online(configure,toolbin,framework,env):
     online=store/'runtime-netplay';ini=online/'RoadRashNativeResearch.netplay.ini'
     if ini.exists():ini.unlink()   # never a stale online game
     if not args.netplay_libs:say('Online game skipped: its libraries were not prepared.');return
-    libs=args.netplay_libs.resolve()
+    libs=setup_report.plain_path(args.netplay_libs.resolve()) or args.netplay_libs.resolve()
     try:
         fingerprint=online_fingerprint();build=store/'runtime-netplay-build'
         with (store/'build-online.log').open('w',encoding='utf-8',buffering=1) as out:
@@ -319,6 +331,7 @@ def build_online(configure,toolbin,framework,env):
         ini.write_text(f'[build]\nfingerprint={fingerprint}\nnetplay=1\nmode=delay\nplayers=8\nlobby={1 if on("RNET_ENABLE_ICE") else 0}\n',encoding='ascii')
         say('Online game ready, fingerprint '+fingerprint)
     except Exception as error:
+        say(setup_report.failure(error,'Building the online game',fatal=False))
         say('Online game not built ('+str(error)+'); the offline game is unaffected.')
 try:
     image=required(store/'game-disc.bin');disc=Disc(image)
@@ -358,5 +371,5 @@ try:
     (store/'local-build.json').write_text(json.dumps(receipt,indent=2)+'\n')
     status('Local game installation is ready. Return to the launcher and select Play.')
 except Exception as error:
-    say(str(error));sys.exit(1)
+    say(setup_report.failure(error,STEP[0]));sys.exit(1)
 finally:log.close()

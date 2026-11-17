@@ -238,7 +238,9 @@ static const TnItem tn_items[]={
  {"setup_high",16,2,-1,TN_FIXED,"High end","1440p, 16:9, 120 FPS, supersampling and the most detailed riders. Needs a fast PC and a 120 Hz display.\nChange it later in Options > Display."},
  /* 1.2: last in the table, so files written before it place it after Report a problem. */
  {"updates",4,4,-1,0,"Check for updates","Look for a new version on GitHub (the launcher also checks once a day).\nUpdates keep your saves, settings and installed game."},
- {"game_folder",4,5,-1,0,"Change game folder","Short of space? Move the game to another folder or drive.\nSaves, settings and mods move with it."}};
+ {"game_folder",4,5,-1,0,"Change game folder","Short of space? Move the game to another folder or drive.\nSaves, settings and mods move with it."},
+ /* Opens launcher_uninstall.h's pages (40, 41), which stay out of tuning.ini so the confirm step can't be reordered. */
+ {"uninstall",4,6,40,0,"Uninstall","Remove the game from this PC: its disc copy, build tools and built games.\nYou choose whether your saves and settings stay."}};
 #define TN_ITEMS ((int)(sizeof tn_items/sizeof tn_items[0]))
 #define TN_ROWS 32
 /* Items shown by default on another page than their native one: the Display

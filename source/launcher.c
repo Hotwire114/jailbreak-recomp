@@ -674,6 +674,7 @@ static void go_back(void){
     page=parent;list_first=0;InvalidateRect(mainwindow,NULL,FALSE);
 }
 #include "launcher_motion.h"
+#include "launcher_uninstall.h"
 
 typedef struct NamePrompt {HWND edit;wchar_t name[9];int accepted;} NamePrompt;
 static LRESULT CALLBACK name_proc(HWND window,UINT msg,WPARAM wp,LPARAM lp){
@@ -843,7 +844,7 @@ static unsigned voice_preview(int voice,int seat){   /* returns the milliseconds
 }
 static void native_action(void){
     if(busy&&page!=SETUP_PAGE)return;
-    if(!installed){import_disc();return;}
+    if(!installed){if(un_finished)PostMessageW(mainwindow,WM_CLOSE,0,0);else import_disc();return;}
     if(!page){
         if(selected==0)play_game();
         else if(selected==5)PostMessageW(mainwindow,WM_CLOSE,0,0);
@@ -857,6 +858,7 @@ static void native_action(void){
     if(page==MULTI_PAGE){if(selected==1){if(!lobby_ready){notice(L"PLAY ONLINE NEEDS THE ONLINE BUILD OF THE GAME");return;}open_page(LB_ROOMS_PAGE);pub_auth();if(pub_signed_in())pub_request_list();}else open_page(ONLINE_PAGE);return;}   /* the list also brings the players-online count */
     if(LB_PAGE(page)){lb_action();InvalidateRect(mainwindow,NULL,FALSE);return;}
     if(page==ONLINE_PAGE){online_action();InvalidateRect(mainwindow,NULL,FALSE);return;}
+    if(UN_PAGES(page)){un_action();InvalidateRect(mainwindow,NULL,FALSE);return;}   /* launcher_uninstall.h */
     if(page==CHEAT_PAGE){cp_action(selected);InvalidateRect(mainwindow,NULL,FALSE);return;}
     if(SB_PAGE(page)){sb_action();InvalidateRect(mainwindow,NULL,FALSE);return;}
     /* Original game page: row 0 plays, 1-6 step a setting, 7 restores them all. */
@@ -878,13 +880,13 @@ static void native_action(void){
         else if(selected==13)scanline_mode=(scanline_mode+1)%rr_scanline_steps;else if(selected==14)draw_mode=(draw_mode+1)%rr_draw_steps;
         else if(selected>=16&&selected<20)post_fx[selected-16]=(post_fx[selected-16]+1)%rr_post_steps;else if(selected==20)shadow_mode=(shadow_mode+1)%rr_shadow_steps;save_settings();}
     if(page==3){if(selected==0)import_mod();else if(selected==1){wchar_t path[32768];join(path,store,L"mods");ensure(path);ShellExecuteW(mainwindow,L"open",path,NULL,NULL,SW_SHOWNORMAL);}else if(selected==2)run_mod(L"dump",NULL);else if(selected-3<mod_count)run_mod(L"toggle",mod_ids[selected-3]);}
-    if(page==4){if(selected==0)import_disc();else if(selected==1)ShellExecuteW(mainwindow,L"open",store,NULL,NULL,SW_SHOWNORMAL);else if(selected==2)run_setup_again();else if(selected==3)report_problem();else if(selected==4){if(update_version[0])update_install();else update_check(1);}else if(selected==5)folder_change(1);}
+    if(page==4){if(selected==0)import_disc();else if(selected==1)ShellExecuteW(mainwindow,L"open",store,NULL,NULL,SW_SHOWNORMAL);else if(selected==2)run_setup_again();else if(selected==3)report_problem();else if(selected==4){if(update_version[0])update_install();else update_check(1);}else if(selected==5)folder_change(1);else if(selected==6)un_open();}
     if(page==6){if(selected==0){rename_riders=!rename_riders;save_settings();}else edit_rider_name(selected-1);}
     InvalidateRect(mainwindow,NULL,FALSE);
 }
 /* The selected row's handler, on the item's own page and row (tuning.ini). */
 static void action(void){
-    if(busy&&page!=SETUP_PAGE)return;if(!installed){import_disc();return;}
+    if(busy&&page!=SETUP_PAGE)return;if(!installed){if(un_finished)PostMessageW(mainwindow,WM_CLOSE,0,0);else import_disc();return;}
     if(IS_DEV(page)){dev_action();InvalidateRect(mainwindow,NULL,FALSE);return;}
     int np;if(DYN_PAGE(page)||!nat_enter(selected,&np)){if(DYN_PAGE(page))native_action();return;}
     native_action();nat_leave(np);InvalidateRect(mainwindow,NULL,FALSE);
@@ -911,6 +913,7 @@ static void native_adjust(int dir){
     else if(page==2&&selected==15){int p=current_preset();p=p==PRESET_CUSTOM?(dir>0?0:2):(p+(dir>0?1:2))%3;apply_preset(p);}
     else if(page==16){}
     else if(page==ONLINE_PAGE)online_adjust(dir);
+    else if(UN_PAGES(page))un_adjust(dir);
     else if(LB_PAGE(page))lb_adjust(dir);
     else if(page==ORIGINAL_PAGE&&selected>=1&&selected<=ORIG_COUNT){int k=selected-1,n=orig_steps(k);orig[k]=(orig[k]+(dir>0?1:n-1))%n;save_settings();}
     else if(page==2&&(selected==0||selected==6||selected==7)){if(selected==0)resolution=(resolution+(dir>0?1:4))%5;else if(selected==6)aspect=(aspect+(dir>0?1:2))%3;else smooth_motion=(smooth_motion+(dir>0?1:2))%3;save_settings();}
@@ -947,7 +950,7 @@ static LRESULT CALLBACK proc(HWND window,UINT msg,WPARAM wp,LPARAM lp){
             /* install_game.py's compile progress: a second line "progress=<0-100>" (no line: the moving bar). */
             if(n){char*p=strstr(line,"\nprogress=");build_percent=busy==2&&p?atoi(p+10):-1;line[strcspn(line,"\r\n")]=0;MultiByteToWideChar(CP_UTF8,0,line,-1,status_text,256);}}
             const wchar_t*av=setup_antivirus_note();if(av&&wcsncmp(status_text,L"SETUP FAILED",12))wcscpy(status_text,av);}
-        update_poll();folder_poll();
+        update_poll();folder_poll();un_poll();
         if(builder){DWORD code;if(builder_exit(&code)&&code!=STILL_ACTIVE){int was_mod=busy==3,was_original=busy==4;CloseHandle(builder);builder=NULL;busy=0;
             if(was_mod||was_original){
                 if(was_mod)mod_reload();

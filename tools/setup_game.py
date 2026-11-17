@@ -28,10 +28,14 @@ args = ap.parse_args()
 DATA = pathlib.Path(args.data_root).resolve(); DATA.mkdir(parents=True, exist_ok=True)
 LOG = DATA / 'setup.log'; STATUS = DATA / 'build-status.txt'   # the launcher starts setup.log fresh
 
+sys.path.insert(0, str(HERE)); import setup_report
+STEP = ['starting']   # the step a failure is reported against
 def status(message):
     with open(LOG, 'a', encoding='utf-8') as f: f.write(message + '\n')
     STATUS.write_text(message, encoding='utf-8')
     print(message, flush=True)
+    if not message.startswith(('SETUP FAILED', 'Verified cached')): STEP[0] = message.split(':')[0]
+with open(LOG, 'a', encoding='utf-8') as _f: _f.write(setup_report.header('setup_game.py', PACKAGE, DATA, args.workspace) + '\n')
 
 NEED_GB = 8   # build folders, the two games and the compile cache (about 3 GB measured, cache up to 5 GB)
 
@@ -44,6 +48,17 @@ def plain_reason(error):
         try: text += '\n' + (DATA / name).read_text(encoding='utf-8', errors='replace')[-6000:]
         except OSError: pass
     low = text.lower()
+    if setup_report.NON_ASCII in text: return setup_report.NON_ASCII
+    problem = setup_report.drive_problem(DATA)
+    if problem: return problem
+    if any(k in low for k in ('winerror 206', 'filename or extension is too long', 'path too long', 'name too long')):
+        return ('The game folder\'s path is too long for the build. Choose a shorter folder, e.g. D:\\Games '
+                '(Game installation > Change game folder), then choose Run setup again.')
+    missing = [p for p in setup_report._paths_in(error) if not os.path.exists(p)]
+    if isinstance(error, FileNotFoundError) or 'winerror 3]' in low or 'winerror 2]' in low or 'cannot find the path' in low:
+        where = f' ({missing[0]})' if missing else ''
+        return (f'Setup couldn\'t find a file or folder it needs{where} during "{STEP[0]}". Choose Run setup '
+                'again; if it fails again, choose Report a problem so the log can be checked.')
     if any(k in low for k in ('no space left', 'not enough space', 'disk full', 'errno 28', 'winerror 112')):
         return f'Your drive is full. Setup needs about {NEED_GB} GB free. Free some space, then choose Run setup again.'
     if any(k in low for k in ('contains a virus', 'potentially unwanted', 'winerror 225', 'access is denied', 'permission denied',
@@ -56,7 +71,8 @@ def plain_reason(error):
         return 'Import your original game first.'
     if any(k in low for k in ('urlopen error', 'timed out', 'getaddrinfo', 'connection', 'could not be downloaded', 'sha-256')):
         return 'A download failed. Check your internet connection, then choose Run setup again.'
-    return 'Setup could not finish. Choose Run setup again; if it fails again, choose Report a problem.'
+    return (f'Setup stopped during "{STEP[0]}". Choose Run setup again; if it fails again, choose Report a '
+            'problem (the log now says exactly what went wrong).')
 
 def sha256(path):
     h = hashlib.sha256()
@@ -144,14 +160,20 @@ def netplay_libs():
         return None
 
 try:
+    # The build tools can't use a folder whose path has letters outside plain English (GitHub
+    # issue 5): build through the folder's short name when there is one, else say so now.
+    BUILD = setup_report.plain_path(DATA)
+    if BUILD is None: raise RuntimeError(setup_report.NON_ASCII)
+    if BUILD != DATA: status(f'Building through the folder\'s short name {BUILD} (its path has non-English letters)')
     if not args.tools_only and not (DATA / 'game-disc.bin').is_file(): raise RuntimeError('Import your original game in the launcher first.')
     free = shutil.disk_usage(DATA).free / 2**30
     if free < NEED_GB: raise RuntimeError(f'Not enough space left on the drive ({free:.1f} GB free, about {NEED_GB} GB needed)')
     manifest = PACKAGE / 'recipe/toolkit.json'; pins = json.loads(manifest.read_text(encoding='utf-8')); pin_hash = sha256(manifest)
     if args.workspace:
-        ws = pathlib.Path(args.workspace).resolve(); status('Using the selected local development toolkit')
+        ws = setup_report.plain_path(pathlib.Path(args.workspace).resolve()); status('Using the selected local development toolkit')
+        if ws is None: raise RuntimeError(setup_report.NON_ASCII)
     else:
-        ws = DATA / 'toolkits' / pins['id']
+        ws = BUILD / 'toolkits' / pins['id']
         receipt_path = ws / 'toolkit-ready.json'
         if receipt_path.is_file():
             receipt = json.loads(receipt_path.read_text(encoding='utf-8-sig'))
@@ -197,7 +219,7 @@ try:
     if args.tools_only: sys.exit(0)
     libs = netplay_libs()
     status('Compiling your native game from installed game data')
-    command = [sys.executable, HERE / 'install_game.py', '--data-root', DATA, '--workspace', ws]
+    command = [setup_report.plain_path(sys.executable) or sys.executable, HERE / 'install_game.py', '--data-root', BUILD, '--workspace', ws]
     if args.force_compile: command.append('--force-compile')
     if libs: command += ['--netplay-libs', libs]
     run_tool(command)
@@ -206,6 +228,8 @@ try:
 except SystemExit:
     raise
 except Exception as e:
+    report = setup_report.failure(e, STEP[0])
+    for name in ('setup.log', 'build.log'):
+        with open(DATA / name, 'a', encoding='utf-8') as f: f.write(report + '\n')
     status('SETUP FAILED: ' + plain_reason(e))
-    with open(DATA / 'build.log', 'a', encoding='utf-8') as f: f.write('\n' + str(e) + '\n')
     sys.exit(1)

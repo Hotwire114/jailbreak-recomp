@@ -14,7 +14,7 @@
  * <name>.old-update (Windows allows renaming the running launcher) and the new file put
  * in its place. The new launcher starts and the old files are deleted on its next start.
  * launcher.ini [update] check=0 turns the automatic check off; the button still works. */
-#define RR_VERSION "1.2.3"
+#define RR_VERSION "1.2.4"
 #define RR_UPDATE_API "https://api.github.com/repos/Hotwire114/jailbreak-recomp/releases/latest"
 #define RR_UPDATE_PAGE L"https://github.com/Hotwire114/jailbreak-recomp/releases/latest"
 

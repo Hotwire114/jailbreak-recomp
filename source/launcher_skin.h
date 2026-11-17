@@ -39,14 +39,19 @@ static int cp_row_count(void);static int cp_custom_count(void);static int cp_row
 #define DISPLAY_GROUP_LAST 27
 /* Multiplayer > Play online, pages 28-29 and Public rooms 38 (lobby_page.h, included by launcher.c). */
 #define LB_PAGE(p) ((p)==28||(p)==29||(p)==38||(p)==39)
+/* Game installation > Uninstall and its Are you sure? (launcher_uninstall.h). */
+#define UNINSTALL_PAGE 40
+#define UNINSTALL_CONFIRM 41
+#define UN_PAGES(p) ((p)==UNINSTALL_PAGE||(p)==UNINSTALL_CONFIRM)
 static int page_live(int p){
 #ifdef RR_PUBLIC_RELEASE
     if(IS_DEV(p))return 0;   /* no Developer page */
 #endif
-    return p==5?0:p==9?11:p==12?13:IS_DEV(p)&&p<=DEV_LAST?p:LB_PAGE(p)?p:p<0||p>DISPLAY_GROUP_LAST?0:p;}
+    return p==5?0:p==9?11:p==12?13:IS_DEV(p)&&p<=DEV_LAST?p:LB_PAGE(p)||UN_PAGES(p)?p:p<0||p>DISPLAY_GROUP_LAST?0:p;}
 /* Saves browser, pages 20-22 (save_browser.h, included at the end). */
 #define SB_PAGE(p) ((p)>=20&&(p)<=22)
-#define DYN_PAGE(p) (SB_PAGE(p)||LB_PAGE(p))
+#define DYN_PAGE(p) (SB_PAGE(p)||LB_PAGE(p)||UN_PAGES(p))
+static int un_row(int,wchar_t*,wchar_t*,size_t);static const wchar_t*un_help(void);static int un_finished;static wchar_t un_result[700];   /* uninstalled: the setup screen says what happened and offers Close */
 static int lb_row_count(void);static int lb_row(int,wchar_t*,wchar_t*,size_t);static void lb_draw_chat(double,double,double,double);static const wchar_t*lb_help(void);static const wchar_t*lb_page_title(int);
 static int sb_row_count(void);static int sb_row(int,wchar_t*,wchar_t*,size_t);static const wchar_t*sb_help(void);static const wchar_t*sb_page_title(int);
 static void sb_draw_art(double,double,double,double);static const wchar_t*sb_key(const wchar_t*,const wchar_t*,const wchar_t*);
@@ -88,10 +93,10 @@ static int det_safe(void){return tn_live.lod_safe;}
 /* Level of detail step label: "Original", then the switch-distance multiple. */
 static void detail_name(int step,wchar_t*out,size_t cap){char t[16];tn_lod_name(det_percent(step),t,sizeof t);MultiByteToWideChar(CP_UTF8,0,t,-1,out,(int)cap);}
 static int mods_on(void){int n=0;for(int i=0;i<mod_count;i++)n+=mod_enabled[i]!=0;return n;}
-static int native_count(void){switch(page){case 0:return 6;case CHEAT_PAGE:return cp_row_count();case 20:case 21:case 22:return sb_row_count();case 28:case 29:case 38:return lb_row_count();case 1:return 14;case 2:return 25;case 3:return 3+mod_count;case 4:return 6;case 7:case 8:return 4;case 11:return 5;case 15:return 2*RR_LOOK_KINDS+1;case MULTI_PAGE:return 2;case ONLINE_PAGE:return 6;case ORIGINAL_PAGE:return ORIG_COUNT+2;default:return 3;}}
+static int native_count(void){switch(page){case 0:return 6;case CHEAT_PAGE:return cp_row_count();case 20:case 21:case 22:return sb_row_count();case 28:case 29:case 38:return lb_row_count();case 1:return 14;case 2:return 25;case 3:return 3+mod_count;case 4:return 7;case UNINSTALL_PAGE:case UNINSTALL_CONFIRM:return 2;case 7:case 8:return 4;case 11:return 5;case 15:return 2*RR_LOOK_KINDS+1;case MULTI_PAGE:return 2;case ONLINE_PAGE:return 6;case ORIGINAL_PAGE:return ORIG_COUNT+2;default:return 3;}}
 static int dev_row_count(void);static int dev_row(int,wchar_t*,wchar_t*,size_t);static const wchar_t*dev_help(void);static int dev_parent(int);static const wchar_t*dev_title(int);static int dev_dirty(void);
 static int row_count(void){if(nat_vp>=0||DYN_PAGE(page))return native_count();if(IS_DEV(page))return dev_row_count();VRow v[TN_ROWS+8];return view_rows(page,v,TN_ROWS+8);}
-static int static_parent(int p){switch(p){case 3:case 4:case 7:case 20:case CHEAT_PAGE:case DEV_PAGE:case MULTI_PAGE:case ORIGINAL_PAGE:return 0;case ONLINE_PAGE:case 28:return MULTI_PAGE;case 29:case 38:case 39:return 28;case 21:case 22:return 20;case 2:case 8:case 11:case 13:return 7;case 24:case 25:case 26:case 27:return 2;case 6:case 10:case 14:case 15:return 8;case 1:return 11;default:return 0;}}
+static int static_parent(int p){switch(p){case 3:case 4:case 7:case 20:case CHEAT_PAGE:case DEV_PAGE:case MULTI_PAGE:case ORIGINAL_PAGE:return 0;case ONLINE_PAGE:case 28:return MULTI_PAGE;case 29:case 38:case 39:return 28;case 21:case 22:return 20;case UNINSTALL_PAGE:return 4;case UNINSTALL_CONFIRM:return UNINSTALL_PAGE;case 2:case 8:case 11:case 13:return 7;case 24:case 25:case 26:case 27:return 2;case 6:case 10:case 14:case 15:return 8;case 1:return 11;default:return 0;}}
 /* The page holding the visible item that opens p (items can move between pages). */
 static int parent_of(int p){
     if(p>DEV_PAGE&&p<=DEV_LAST)return dev_parent(p);if(p==21||p==22)return 20;
@@ -99,7 +104,7 @@ static int parent_of(int p){
     return static_parent(p);
 }
 static int parent_page(void){return parent_of(page);}
-static const wchar_t*page_title(int p){p=page_live(p);if(IS_DEV(p))return dev_title(p);if(SB_PAGE(p))return sb_page_title(p);if(LB_PAGE(p))return lb_page_title(p);int q=tn_page_of_num(p);return q>=0?tn_titles[q]:L"";}
+static const wchar_t*page_title(int p){p=page_live(p);if(IS_DEV(p))return dev_title(p);if(SB_PAGE(p))return sb_page_title(p);if(LB_PAGE(p))return lb_page_title(p);if(UN_PAGES(p))return p==UNINSTALL_PAGE?L"UNINSTALL":L"ARE YOU SURE?";int q=tn_page_of_num(p);return q>=0?tn_titles[q]:L"";}
 static const wchar_t*on_off(int v){return v?L"On":L"Off";}
 static int native_row(int item,wchar_t*label,wchar_t*value,size_t cap);
 /* Achievements (achievements.h): written by the game, read here. */
@@ -139,6 +144,7 @@ static int launcher_row(int r,wchar_t*label,wchar_t*value,size_t cap){
 static int row_warn;
 static int native_row(int item,wchar_t*label,wchar_t*value,size_t cap){
     label[0]=value[0]=0;int kind=ROW_VALUE;row_warn=0;
+    if(UN_PAGES(page))return un_row(item,label,value,cap);   /* launcher_uninstall.h */
     switch(page){
     case 0:{const wchar_t*names[]={L"Play",L"Saves",L"Mods",L"Options",L"Game installation",L"Quit",L"Developer",L"Cheats",L"Multiplayer",L"Play original game"};wcsncpy(label,names[item>=0&&item<10?item:6],cap);kind=ROW_MENU;
         if(item==7&&enhanced_mode&&cp_active())swprintf(value,cap,L"%d on",cp_on_count());
@@ -177,7 +183,7 @@ static int native_row(int item,wchar_t*label,wchar_t*value,size_t cap){
         else if(item==2){wcsncpy(label,L"Dump for modding",cap);wcsncpy(value,on_off(mod_dump),cap);}
         else{wcsncpy(label,mod_names[item-3],cap);wcsncpy(value,on_off(mod_enabled[item-3]),cap);}
         break;
-    case 4:{const wchar_t*names[]={L"Repair / re-import game",L"Open installation folder",L"Run setup again",L"Report a problem",L"Check for updates",L"Change game folder"};if(item==4&&update_version[0])swprintf(label,cap,L"Update to version %ls",update_version);else wcsncpy(label,names[item>=0&&item<6?item:0],cap);kind=ROW_ACTION;break;}
+    case 4:{const wchar_t*names[]={L"Repair / re-import game",L"Open installation folder",L"Run setup again",L"Report a problem",L"Check for updates",L"Change game folder",L"Uninstall"};if(item==4&&update_version[0])swprintf(label,cap,L"Update to version %ls",update_version);else wcsncpy(label,names[item>=0&&item<7?item:0],cap);kind=item==6?ROW_MENU:ROW_ACTION;break;}
     case SETUP_PAGE:wcsncpy(label,preset_names[item%3],cap);kind=ROW_ACTION;break;
     case 6:if(item==0){wcsncpy(label,L"Custom names",cap);wcsncpy(value,on_off(rename_riders),cap);}else{swprintf(label,cap,L"Player %d name",item);wcsncpy(value,rider_names[item-1],cap);kind=ROW_ACTION;}break;
     case 7:{const wchar_t*names[]={L"Display",L"User settings",L"Audio",L"System"};wcsncpy(label,names[item],cap);kind=ROW_MENU;break;}
@@ -242,6 +248,7 @@ static const wchar_t*native_help(void){
     static wchar_t text[600];
     if(SB_PAGE(page))return sb_help();
     if(LB_PAGE(page))return lb_help();
+    if(UN_PAGES(page))return un_help();
     if(page==0){
         if(selected==6)return L"";
         if(selected==7)return enhanced_mode?(cp_active()?L"Cheats are ON: GameShark codes and unlocks apply in Enhanced games.\nAchievements stay locked until every cheat is off.":L"GameShark codes and the game's own unlocks, for Enhanced. All off by default.\nAchievements stay locked while any cheat is on."):L"Cheats apply in Enhanced only.\nOriginal always plays the stock game.";
@@ -315,6 +322,7 @@ static const wchar_t*native_help(void){
         update_version[0]?L"A new version is on GitHub. Download it and restart the launcher.\nSaves, settings and your installed game are kept.":L"Look for a new version on GitHub (the launcher also checks once a day).\nUpdates keep your saves, settings and installed game."};
         if(selected==5){double g=free_gb(store);wchar_t shown[64];if(!PathCompactPathExW(shown,store,40,0))wcsncpy(shown,store,63),shown[63]=0;
             swprintf(text,600,L"Now in %ls (%.0f GB free).\nShort of space? Move the game to another drive. Saves, settings and mods go with it.",shown,g<0?0:g);return text;}
+        if(selected==6)return L"Remove the game from this PC: its disc copy, build tools and built games.\nYou choose whether your saves and settings stay.";
         return help[selected>=0&&selected<5?selected:0];}
     if(page==6)return selected?L"Type a name of up to 8 characters.\nSaved on this PC.":enhanced_mode?L"Custom names appear in supported race HUD labels. Characters and saved profiles stay unchanged.":L"Names apply in Enhanced. Original keeps the game's own rider names.";
     if(page==7){const wchar_t*help[]={L"Resolution, textures, HD UI, aspect ratio, frame rate and level of detail.",L"Everything about your riders: names and taunt voices.\nAlso your achievements.",L"Music: the original soundtrack or your own WAV tracks.",L"Loading speed, intro movies, controls and start-up."};return help[selected];}
@@ -390,7 +398,8 @@ static int native_art(void){
         return a[selected>=0&&selected<15?selected:0];}
     case 3:return RR_ART_CHOPPER;
     /* repair, open folder, prepare build, report a problem (the cop on the radio), play original */
-    case 4:{const int a[]={RR_ART_STONE_LOGO,RR_ART_STONE_LOGO,RR_ART_SPAZ_ESCORT,RR_ART_HELMET_COP,RR_ART_BETA_MAP};return a[selected>=0&&selected<5?selected:0];}
+    case 4:{const int a[]={RR_ART_STONE_LOGO,RR_ART_STONE_LOGO,RR_ART_SPAZ_ESCORT,RR_ART_HELMET_COP,RR_ART_BETA_MAP};return selected==6?RR_ART_WRECK:a[selected>=0&&selected<5?selected:0];}
+    case UNINSTALL_PAGE:return RR_ART_WRECK;case UNINSTALL_CONFIRM:return selected?RR_ART_WRECK:RR_ART_STONE_LOGO;
     /* the riders' own portraits where a rider is named or speaks */
     case 6:{const int a[]={RR_ART_GANG,RR_ART_SWITCH,RR_ART_KAT};return a[selected>=0&&selected<3?selected:0];}
     case 14:{const int a[]={RR_ART_BRICK,RR_ART_DRU,RR_ART_TAUNT};return a[selected>=0&&selected<3?selected:0];}
@@ -688,7 +697,7 @@ static void folder_rect(double*r){r[0]=ui.cx+640-340;r[1]=ui.by+620;r[2]=680;r[3
 static int ui_hit(int px,int py,int*row){
     double x=px/ui.k,y=py/ui.k,b[4];*row=-1;
     if(!installed){find_rect(b);if(x>=b[0]&&x<b[0]+b[2]&&y>=b[1]&&y<b[1]+b[3])return HIT_FIND;
-        folder_rect(b);return !busy&&!data_root_given&&x>=b[0]&&x<b[0]+b[2]&&y>=b[1]&&y<b[1]+b[3]?HIT_FOLDER:HIT_NONE;}
+        folder_rect(b);return !busy&&!data_root_given&&!un_finished&&x>=b[0]&&x<b[0]+b[2]&&y>=b[1]&&y<b[1]+b[3]?HIT_FOLDER:HIT_NONE;}
     back_rect(b);if(page&&x>=b[0]&&x<b[0]+b[2]&&y>=b[1]&&y<b[1]+b[3])return HIT_BACK;
     if(arrow_row>=0&&arrow_row==selected&&y>=arrow_y&&y<arrow_y+arrow_h){
         if(x>=arrow_lx&&x<arrow_lx+28){*row=arrow_row;return HIT_PREV;}
@@ -831,6 +840,8 @@ static void draw_toast(void){
 static void draw_setup(void){
     draw_logo(ui.cx+290,ui.by+96,700,320);
     double b[4];find_rect(b);draw_bar(b[0],b[1],b[2],b[3],!busy);
+    if(un_finished){system_text(L"Close the launcher",b[0],b[1],b[2],b[3],25,FW_SEMIBOLD,C_WHITE,DT_CENTER|DT_VCENTER|DT_SINGLELINE);
+        system_text(un_result,ui.cx+190,b[1]+b[3]+20,900,90,17,FW_NORMAL,C_STEEL,DT_CENTER|DT_TOP|DT_WORDBREAK);return;}
     system_text(busy==1?L"Installing your game\u2026":L"Find your game (.bin)",b[0],b[1],b[2],b[3],25,FW_SEMIBOLD,busy?C_DIM:C_WHITE,DT_CENTER|DT_VCENTER|DT_SINGLELINE);
     system_text(L"Select your Road Rash: Jailbreak (USA) disc image: the .bin, or its .cue / .iso.\nIt is checked first, then installed on this PC. No game files are used before that.",ui.cx+190,b[1]+b[3]+20,900,60,17,FW_NORMAL,C_STEEL,DT_CENTER|DT_TOP|DT_WORDBREAK);
     if(!busy&&!data_root_given){   /* where it installs, changeable before anything is installed */
