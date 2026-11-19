@@ -336,9 +336,16 @@ void apply_detail(){
 // with the road (see level of detail). The table is race-overlay data (zeros
 // in the menus), so it is only written while it holds the stock values or a
 // step written here. RR_DRAW_SCALE=<percent> overrides the setting for tests.
-constexpr uint32_t cull_table=0x800CC6A4;constexpr int cull_words=7;
+// Riders and bikes (types 1, 2) stop at kRiderCullMax. The game puts a rider who
+// fell far behind back on the road ahead of the player, out of sight at the stock
+// cull (measured 19 Nov: one moved 147,745 and landed 18,504 ahead); at 3x
+// (23,040) that rider popped up in front of you. 18,000 also stays clear of the
+// frozen riders (~21,600, hide_frozen below). Traffic keeps the full scale.
+constexpr uint32_t cull_table=0x800CC6A4;constexpr int cull_words=7;constexpr int32_t kRiderCullMax=18000;
 const int32_t cull_stock[cull_words]={7680,7680,7680,12480,7680,7680,6400};
-void cull_scaled(int percent,int32_t*out){for(int i=0;i<cull_words;i++)out[i]=i>=1&&i<=3?cull_stock[i]*percent/100:cull_stock[i];}
+void cull_scaled(int percent,int32_t*out){for(int i=0;i<cull_words;i++){
+    out[i]=i>=1&&i<=3?cull_stock[i]*percent/100:cull_stock[i];
+    if((i==1||i==2)&&out[i]>kRiderCullMax)out[i]=kRiderCullMax;}}
 int draw_percent(){static int env=[]{const char*e=std::getenv("RR_DRAW_SCALE");int p=e?std::atoi(e):0;return p>=100&&p<=1000?p:0;}();
     return env?env:rr_draw_percent(options.draw);}
 // Frozen riders. The game stops updating a rider and its bike once they are
@@ -346,14 +353,18 @@ int draw_percent(){static int env=[]{const char*e=std::getenv("RR_DRAW_SCALE");i
 // view) and pose stay as they were. The stock cull distance hides them long
 // before that, but a larger one (3x: 23,040) drew them with their old
 // placement: copies of riders floating over the track, replaying their last
-// moves. A rider or bike past the stock cull whose distance has not changed
-// for kFrozenFrames game frames gets a far distance (kFar, a value the game's
+// moves. A rider or bike past kFrozenMin whose distance has not changed for
+// kFrozenFrames game frames gets a far distance (kFar, a value the game's
 // own data holds), so the draw skips it as it always did; the game writes the
-// real distance again as soon as it updates the object. Bikes are the race
+// real distance again as soon as it updates the object. Frozen ones measured
+// 21,650-21,900 (16 Nov); only past kFrozenMin, and only after a long still
+// spell, so a live rider holding a steady gap (8 frames is 67 ms at 120 FPS)
+// is never hidden: 1.2.3 used the stock cull and 8 frames, and riders could
+// blink off their bikes and back. Bikes are the race
 // actors (*0x8005B3A0, 0x448 apart); riders are 0x274 apart, Player 1's last,
 // each AI rider hanging off its bike (+0x38) while riding.
 constexpr uint32_t kActors=0x8005B3A0,kFrameCounter=0x8005AC8C+0x7E0;
-constexpr uint32_t kActorStride=0x448,kRiderStride=0x274;constexpr int kRaceRiders=16,kFrozenFrames=8;constexpr int32_t kFar=0x10000;
+constexpr uint32_t kActorStride=0x448,kRiderStride=0x274;constexpr int kRaceRiders=16,kFrozenFrames=30;constexpr int32_t kFar=0x10000,kFrozenMin=21000;
 uint32_t ram_word(uint32_t a){uint32_t v;std::memcpy(&v,memory_get_ram_ptr()+(a&0x1fffff),4);return v;}
 bool ram_ptr(uint32_t a){return a>=0x80010000u&&a<0x801FF000u&&!(a&3);}
 int object_type(uint32_t object){const uint32_t mesh=ram_word(object);if(!ram_ptr(mesh))return -1;uint16_t f;std::memcpy(&f,memory_get_ram_ptr()+((mesh+0x0E)&0x1fffff),2);return (f&0x78)>>3;}
@@ -374,7 +385,7 @@ void hide_frozen(){
         for(int v=0;v<2;v++){
             const uint32_t at=objects[k]+0x2C+4*v;const int32_t d=(int32_t)ram_word(at);
             if(d!=s.d[v]||s.since[v]==0){s.d[v]=d;s.since[v]=frame?frame:1;continue;}
-            if(d<=cull_stock[1]||d>=kFar||frame-s.since[v]<(uint32_t)kFrozenFrames)continue;
+            if(d<kFrozenMin||d>=kFar||frame-s.since[v]<(uint32_t)kFrozenFrames)continue;
             psx_mod_write_word(at,(uint32_t)kFar);s.d[v]=kFar;s.since[v]=frame?frame:1;psx_mod_counter_add("rr.draw.frozen_hidden",1);
         }
     }

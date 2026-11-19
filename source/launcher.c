@@ -130,9 +130,17 @@ static void mod_reload(void){
     for(int i=0;i<mod_count;i++){wchar_t section[16];swprintf(section,16,L"mod%d",i);GetPrivateProfileStringW(section,L"name",L"Mod",mod_names[i],96,path);GetPrivateProfileStringW(section,L"id",L"",mod_ids[i],64,path);GetPrivateProfileStringW(section,L"contents",L"",mod_contents[i],96,path);mod_enabled[i]=GetPrivateProfileIntW(section,L"enabled",0,path)!=0;}
     if(page==3){int n=row_count();if(selected>=n)selected=n?n-1:0;}
 }
-static const wchar_t *control_names[]={L"Accelerate",L"Brake",L"Steer left",L"Steer right",L"Primary attack",L"Alternate attack",L"Kick",L"Pause",L"Change camera"};
-static wchar_t controls[9][40]={L"X",L"Z",L"Left",L"Right",L"W",L"Q",L"R",L"Return",L"Right Shift"};
-static wchar_t padcontrols[9][40]={L"a",L"x",L"dpleft",L"dpright",L"rightshoulder",L"leftshoulder",L"righttrigger",L"start",L"back"};
+/* Every pad button the game reads (its Digital 1 names), then the PC keys, which
+   have no controller button. keybinds.ini / input.ini get all of them: nothing
+   on the keyboard is fixed any more. Two actions never share a key (bind_key). */
+#define RR_PAD_ACTIONS 16
+#define RR_KEY_ACTIONS 18
+static const wchar_t *control_names[]={L"Accelerate",L"Brake",L"Steer left",L"Steer right",L"Primary attack",L"Alternate attack",L"Kick",L"Pause",L"Change camera",
+    L"Up (nitro, menus)",L"Down (menus)",L"Look back",L"Cycle weapon",L"Taunt",L"L3",L"R3",L"PC menu",L"Import music (Jukebox)"};
+static const char *control_buttons[]={"cross","square","left","right","r1","l1","r2","start","select","up","down","circle","triangle","l2","l3","r3"};
+static wchar_t controls[RR_KEY_ACTIONS][40]={L"X",L"Z",L"Left",L"Right",L"W",L"Q",L"R",L"Return",L"Right Shift",L"Up",L"Down",L"S",L"A",L"E",L"T",L"Y",L"F6",L"F7"};
+static __attribute__((unused)) int key_bound(const wchar_t *name){   /* public release: config.ini */for(int i=0;i<RR_KEY_ACTIONS;i++)if(controls[i][0]&&!_wcsicmp(controls[i],name))return 1;return 0;}
+static wchar_t padcontrols[RR_PAD_ACTIONS][40]={L"a",L"x",L"dpleft",L"dpright",L"rightshoulder",L"leftshoulder",L"righttrigger",L"start",L"back",L"dpup",L"dpdown",L"b",L"y",L"lefttrigger",L"leftstick",L"rightstick"};
 static const wchar_t *resolution_names[]={L"Native",L"720p",L"1080p",L"1440p",L"4K"};
 static const char *resolution_values[]={"native","720p","1080p","1440p","4k"};
 static const wchar_t *pad_sources[]={L"a",L"b",L"x",L"y",L"leftshoulder",L"rightshoulder",L"lefttrigger",L"righttrigger",L"dpleft",L"dpright",L"dpup",L"dpdown",L"start",L"back",L"leftstick",L"rightstick"};
@@ -238,7 +246,11 @@ static void settings(void){
      WideCharToMultiByte(CP_UTF8,0,fp,-1,online_fp,65,NULL,NULL);online_runtime=dir;online_ready=1;lobby_ready=1;}
     slowdown_mode=GetPrivateProfileIntW(L"performance",L"slowdown_reduction",0,ini);if(slowdown_mode<0||slowdown_mode>1)slowdown_mode=0;
     for(int k=0;k<ORIG_COUNT;k++){orig[k]=GetPrivateProfileIntW(L"original",orig_keys[k],0,ini);if(orig[k]<0||orig[k]>=orig_steps(k))orig[k]=0;}
-    for(int i=0;i<9;i++){wchar_t key[12];swprintf(key,12,L"key%d",i);GetPrivateProfileStringW(L"controls",key,controls[i],controls[i],40,ini);swprintf(key,12,L"pad%d",i);GetPrivateProfileStringW(L"controls",key,padcontrols[i],padcontrols[i],40,ini);}
+    for(int i=0;i<RR_KEY_ACTIONS;i++){wchar_t key[12];swprintf(key,12,L"key%d",i);GetPrivateProfileStringW(L"controls",key,controls[i],controls[i],40,ini);if(i<RR_PAD_ACTIONS){swprintf(key,12,L"pad%d",i);GetPrivateProfileStringW(L"controls",key,padcontrols[i],padcontrols[i],40,ini);}}
+    /* Rows added after 1.2.4 (Up / Down to R3, the PC keys) start on the keys that
+       used to be fixed; one the player has since given to an earlier action stays
+       there and the new row starts unset. */
+    for(int i=1;i<RR_KEY_ACTIONS;i++)for(int j=0;j<i;j++)if(controls[i][0]&&!_wcsicmp(controls[i],controls[j])){controls[i][0]=0;break;}
 }
 static void save_settings(void){
     WritePrivateProfileStringW(L"display",L"native_60fps",smooth_motion==2?L"2":smooth_motion?L"1":L"0",ini);
@@ -271,7 +283,7 @@ static void save_settings(void){
     for(int k=0;k<ORIG_COUNT;k++){swprintf(value,12,L"%d",orig[k]);WritePrivateProfileStringW(L"original",orig_keys[k],value,ini);}
     WritePrivateProfileStringW(L"online",L"address",online_address,ini);swprintf(value,12,L"%d",online_port);WritePrivateProfileStringW(L"online",L"port",value,ini);
     swprintf(value,12,L"%d",online_delay);WritePrivateProfileStringW(L"online",L"delay",value,ini);
-    for(int i=0;i<9;i++){wchar_t key[12];swprintf(key,12,L"key%d",i);WritePrivateProfileStringW(L"controls",key,controls[i],ini);swprintf(key,12,L"pad%d",i);WritePrivateProfileStringW(L"controls",key,padcontrols[i],ini);}
+    for(int i=0;i<RR_KEY_ACTIONS;i++){wchar_t key[12];swprintf(key,12,L"key%d",i);WritePrivateProfileStringW(L"controls",key,controls[i],ini);if(i<RR_PAD_ACTIONS){swprintf(key,12,L"pad%d",i);WritePrivateProfileStringW(L"controls",key,padcontrols[i],ini);}}
 }
 /* Display presets (Options > Display > Preset, and the first-run page): each
  * sets the picture and performance settings below; the window choice, audio,
@@ -365,23 +377,31 @@ static int write_runtime_settings(void){
         /* A keyboard Player 2 takes the launcher's key map (Player 1 is then on
            a controller); without a [player2] section the runtime would fall
            back to its stock layout. */
-        const char *buttons[]={"cross","square","left","right","r1","l1","r2","start","select"};
-        for(int p=1;p<=(p2_device==2?2:1);p++){fprintf(f,"[player%d]\nup=Up\ndown=Down\ncircle=S\ntriangle=A\nl2=E\nl3=T\nr3=Y\n",p);
-        for(int i=0;i<9;i++){fprintf(f,"%s=",buttons[i]);utf8(f,controls[i]);fputc('\n',f);}const char*axes[]={"rs_up","rs_down","ls_left","ls_right"};for(int i=0;i<4;i++){fprintf(f,"%s=",axes[i]);utf8(f,controls[i]);fputc('\n',f);}fputs("ls_up=Up\nls_down=Down\n",f);}
+        for(int p=1;p<=(p2_device==2?2:1);p++){fprintf(f,"[player%d]\n",p);
+        for(int i=0;i<RR_PAD_ACTIONS;i++){fprintf(f,"%s=",control_buttons[i]);utf8(f,controls[i]);fputc('\n',f);}
+        /* The sticks follow the same keys: right stick up / down = Accelerate / Brake, left stick = steering and Up / Down. */
+        const char*axes[]={"rs_up","rs_down","ls_left","ls_right"};for(int i=0;i<4;i++){fprintf(f,"%s=",axes[i]);utf8(f,controls[i]);fputc('\n',f);}
+        fputs("ls_up=",f);utf8(f,controls[9]);fputs("\nls_down=",f);utf8(f,controls[10]);fputc('\n',f);}
         if(ferror(f))ok=0;if(fclose(f))ok=0;
     }else ok=0;
-    join(path,runtime,L"input.ini");f=_wfopen(path,L"wb");if(f){const char *buttons[]={"cross","square","left","right","r1","l1","r2","start","select"};fputs("[controller]\nenabled=true\ndevice=0\ndeadzone=3277\n[mapping]\nup=dpup\ndown=dpdown\ncircle=b\ntriangle=y\nl2=lefttrigger\nl3=leftstick\nr3=rightstick\n",f);for(int i=0;i<9;i++){fprintf(f,"%s=",buttons[i]);utf8(f,padcontrols[i]);fputc('\n',f);}fputs("ls_left=leftx-\nls_right=leftx+\nls_up=lefty-\nls_down=lefty+\nrs_up=righty-\nrs_down=righty+\nrs_left=rightx-\nrs_right=rightx+\n",f);if(ferror(f))ok=0;if(fclose(f))ok=0;}else ok=0;
+    join(path,runtime,L"input.ini");f=_wfopen(path,L"wb");if(f){fputs("[controller]\nenabled=true\ndevice=0\ndeadzone=3277\n[mapping]\n",f);for(int i=0;i<RR_PAD_ACTIONS;i++){fprintf(f,"%s=",control_buttons[i]);utf8(f,padcontrols[i]);fputc('\n',f);}fputs("ls_left=leftx-\nls_right=leftx+\nls_up=lefty-\nls_down=lefty+\nrs_up=righty-\nrs_down=righty+\nrs_left=rightx-\nrs_right=rightx+\n",f);if(ferror(f))ok=0;if(fclose(f))ok=0;}else ok=0;
     /* Players 3 and 4 live in the runtime's settings.toml (game.toml takes 1 and 2),
        rewritten on every Enhanced launch so an earlier choice never lingers. */
     if(enhanced_mode&&!online_launch){join(path,runtime,L"settings.toml");f=_wfopen(path,L"wb");if(f){fputs("# Written by the launcher on every launch: Players 3 and 4 (controllers on the multitap).\n[controller]\n",f);
         if(p3_device)fputs("p3_device=\"gamepad\"\np3_mode=\"digital\"\n",f);if(p4_device)fputs("p4_device=\"gamepad\"\np4_mode=\"digital\"\n",f);if(ferror(f))ok=0;if(fclose(f))ok=0;}else ok=0;}
-    if(enhanced_mode){join(path,runtime,L"rider-options.ini");f=_wfopen(path,L"wb");if(f){fprintf(f,"[pc]\nin_game_menu=1\n[hud]\nlarger_text=%d\n[riders]\nrename=%d\nname1=",larger_text,rename_riders);utf8(f,rider_names[0]);fputs("\nname2=",f);utf8(f,rider_names[1]);fputc('\n',f);if(ferror(f))ok=0;if(fclose(f))ok=0;}else ok=0;}
+    if(enhanced_mode){join(path,runtime,L"rider-options.ini");f=_wfopen(path,L"wb");if(f){fputs("[pc]\nin_game_menu=1\nmenu_key=",f);utf8(f,controls[16]);fputs("\nmusic_key=",f);utf8(f,controls[17]);fprintf(f,"\n[hud]\nlarger_text=%d\n[riders]\nrename=%d\nname1=",larger_text,rename_riders);utf8(f,rider_names[0]);fputs("\nname2=",f);utf8(f,rider_names[1]);fputc('\n',f);if(ferror(f))ok=0;if(fclose(f))ok=0;}else ok=0;}
 #ifdef RR_PUBLIC_RELEASE
     /* Public release: the runtime's developer hotkeys are unbound (config.ini
        [KeyMap], read next to the game's exe): Turbo (Tab, F9), the savestate
        menu (F7), the performance overlay (F), rewind, the debug capture mark and
        the scanlines toggle. Alt+Enter fullscreen and keypad volume stay. */
-    join(path,runtime,L"config.ini");f=_wfopen(path,L"wb");if(f){fputs("; Written by the launcher on every launch.\n[KeyMap]\nTurbo=None\nTurboToggle=None\nSaveStateMenu=None\nDisplayPerf=None\nRewind=None\nCaptureMark=None\nScanlines=None\n",f);if(ferror(f))ok=0;if(fclose(f))ok=0;}else ok=0;
+    join(path,runtime,L"config.ini");f=_wfopen(path,L"wb");if(f){fputs("; Written by the launcher on every launch.\n[KeyMap]\nTurbo=None\nTurboToggle=None\nSaveStateMenu=None\nDisplayPerf=None\nRewind=None\nCaptureMark=None\nScanlines=None\n",f);
+        /* The ones kept never take a key the player plays with: fullscreen is Alt+Enter
+           only (not Ctrl+F) and steps aside for a bound Alt; keypad + / - volume steps
+           aside for a bound keypad + / -. */
+        fputs(key_bound(L"Left Alt")||key_bound(L"Right Alt")?"Fullscreen=None\n":"Fullscreen=Alt+Return\n",f);
+        if(key_bound(L"Keypad +"))fputs("VolumeUp=None\n",f);if(key_bound(L"Keypad -"))fputs("VolumeDown=None\n",f);
+        if(ferror(f))ok=0;if(fclose(f))ok=0;}else ok=0;
 #endif
     /* Original: no PC menu; the frame rate and Esc choices (rider_menu.cpp), and
        the window mode in the runtime's own settings.toml (rewritten each launch,
@@ -872,7 +892,7 @@ static void native_action(void){
     if(page==11){if(selected==0)return;if(selected==1){fast_loading=!fast_loading;save_settings();}else if(selected==2){skip_intro=!skip_intro;save_settings();}else if(selected==3)open_page(1);else{start_game_directly=!start_game_directly;save_settings();if(start_game_directly)notice(L"NEXT TIME THE GAME STARTS STRAIGHT AWAY — HOLD SHIFT WHILE OPENING FOR THE LAUNCHER");}InvalidateRect(mainwindow,NULL,FALSE);return;}
     if(page==SETUP_PAGE){apply_preset(selected);mark_preset_chosen();page=selected=list_first=nav_depth=0;notice(L"PRESET APPLIED — CHANGE IT ANY TIME IN OPTIONS > DISPLAY");InvalidateRect(mainwindow,NULL,FALSE);return;}
     if(page==10){if(selected>=RR_ACH_COUNT)ach_reset();InvalidateRect(mainwindow,NULL,FALSE);return;}
-    if(page==1){if(selected==0){device=!device;if(!device&&p2_device==2)p2_device=1;}else if(selected==1)p2_cycle(1);else if(selected==2)p3_device=!p3_device;else if(selected==3)p4_device=!p4_device;else if(selected==4)gamepad_map=!gamepad_map;else if(gamepad_map){int row=selected-5,index=0;while(index<16&&wcscmp(pad_sources[index],padcontrols[row]))index++;wcscpy(padcontrols[row],pad_sources[(index+1)%16]);}else binding=selected-5;save_settings();}
+    if(page==1){if(selected==0){device=!device;if(!device&&p2_device==2)p2_device=1;}else if(selected==1)p2_cycle(1);else if(selected==2)p3_device=!p3_device;else if(selected==3)p4_device=!p4_device;else if(selected==4)gamepad_map=!gamepad_map;else if(gamepad_map){int row=selected-5,index=0;if(row>=RR_PAD_ACTIONS)return;while(index<16&&wcscmp(pad_sources[index],padcontrols[row]))index++;wcscpy(padcontrols[row],pad_sources[(index+1)%16]);}else binding=selected-5;save_settings();}
     if(page==2&&selected>=21&&selected<=24){open_page(DISPLAY_GROUP_FIRST+selected-21);return;}   /* Screen, Picture, Detail, Effects */
     if(page==2&&selected==15){int p=current_preset();apply_preset(p==PRESET_CUSTOM?0:(p+1)%3);InvalidateRect(mainwindow,NULL,FALSE);return;}
     if(page==2){if(selected==0)resolution=(resolution+1)%5;else if(selected==1)filter=(filter+1)%rr_filter_steps;else if(selected==2)fullscreen_mode=!fullscreen_mode;else if(selected==3)texture_correction=(texture_correction+1)%rr_tc_offered;else if(selected==4)hd_ui=!hd_ui;else if(selected==5)larger_text=!larger_text;else if(selected==6)aspect=(aspect+1)%3;else if(selected==7)smooth_motion=(smooth_motion+1)%3;else if(selected==8)fmv_wide=!fmv_wide;else if(selected==9)model_detail=(model_detail+1)%tn_live.lod_n;
@@ -931,12 +951,38 @@ static void native_adjust(int dir){
 }
 static int mouse_tracking;
 static int mouse_hit(LPARAM lp,int*row){RECT r;GetClientRect(mainwindow,&r);ui_layout(r.right,r.bottom);return ui_hit((short)LOWORD(lp),(short)HIWORD(lp),row);}
-static void capture_binding(WPARAM key){
-    if(key==VK_ESCAPE){binding=-1;return;}wchar_t name[40]={0};
-    if((key>='A'&&key<='Z')||(key>='0'&&key<='9')){name[0]=(wchar_t)key;name[1]=0;}
-    else if(key>=VK_F1&&key<=VK_F12)swprintf(name,40,L"F%u",(unsigned)key-VK_F1+1);
-    else switch(key){case VK_LEFT:wcscpy(name,L"Left");break;case VK_RIGHT:wcscpy(name,L"Right");break;case VK_UP:wcscpy(name,L"Up");break;case VK_DOWN:wcscpy(name,L"Down");break;case VK_RETURN:wcscpy(name,L"Return");break;case VK_SPACE:wcscpy(name,L"Space");break;case VK_TAB:wcscpy(name,L"Tab");break;case VK_SHIFT:wcscpy(name,L"Left Shift");break;case VK_CONTROL:wcscpy(name,L"Left Ctrl");break;}
-    if(name[0]){wcscpy(controls[binding],name);binding=-1;save_settings();}
+/* The pressed key under SDL's scancode name (what keybinds.ini and the game read):
+   left / right Shift, Ctrl and Alt apart, the keypad (with Num Lock on or off),
+   punctuation by its position (not the comma: keybinds.ini reads one as "or").
+   Letters and digits keep the key's own letter. */
+static int binding_name(WPARAM key,LPARAM lp,wchar_t name[40]){
+    const unsigned sc=(unsigned)(lp>>16)&0xFF;const int ext=(int)(lp>>24)&1;name[0]=0;
+    if((key>='A'&&key<='Z')||(key>='0'&&key<='9')){name[0]=(wchar_t)key;name[1]=0;return 1;}
+    if(key>=VK_F1&&key<=VK_F12){swprintf(name,40,L"F%u",(unsigned)key-VK_F1+1);return 1;}
+    if(key>=VK_NUMPAD0&&key<=VK_NUMPAD9){swprintf(name,40,L"Keypad %u",(unsigned)(key-VK_NUMPAD0));return 1;}
+    /* Navigation keys without the extended bit are the keypad's, Num Lock off. */
+    static const struct{WPARAM vk;const wchar_t*name,*keypad;}nav[]={{VK_LEFT,L"Left",L"Keypad 4"},{VK_RIGHT,L"Right",L"Keypad 6"},{VK_UP,L"Up",L"Keypad 8"},{VK_DOWN,L"Down",L"Keypad 2"},
+        {VK_HOME,L"Home",L"Keypad 7"},{VK_END,L"End",L"Keypad 1"},{VK_PRIOR,L"PageUp",L"Keypad 9"},{VK_NEXT,L"PageDown",L"Keypad 3"},{VK_INSERT,L"Insert",L"Keypad 0"},{VK_DELETE,L"Delete",L"Keypad ."},{VK_CLEAR,L"Keypad 5",L"Keypad 5"}};
+    for(int i=0;i<(int)(sizeof nav/sizeof nav[0]);i++)if(key==nav[i].vk){wcscpy(name,ext?nav[i].name:nav[i].keypad);return 1;}
+    static const struct{unsigned sc;const wchar_t*name;}oem[]={{0x0C,L"-"},{0x0D,L"="},{0x1A,L"["},{0x1B,L"]"},{0x27,L";"},{0x28,L"'"},{0x29,L"`"},{0x2B,L"\\"},{0x34,L"."},{0x35,L"/"}};
+    if(key>=VK_OEM_1&&key<=VK_OEM_8)for(int i=0;i<(int)(sizeof oem/sizeof oem[0]);i++)if(sc==oem[i].sc){wcscpy(name,oem[i].name);return 1;}
+    switch(key){
+    case VK_SHIFT:wcscpy(name,sc==0x36?L"Right Shift":L"Left Shift");return 1;
+    case VK_CONTROL:wcscpy(name,ext?L"Right Ctrl":L"Left Ctrl");return 1;
+    case VK_MENU:wcscpy(name,ext?L"Right Alt":L"Left Alt");return 1;
+    case VK_RETURN:wcscpy(name,ext?L"Keypad Enter":L"Return");return 1;
+    case VK_SPACE:wcscpy(name,L"Space");return 1;case VK_TAB:wcscpy(name,L"Tab");return 1;case VK_BACK:wcscpy(name,L"Backspace");return 1;case VK_CAPITAL:wcscpy(name,L"CapsLock");return 1;
+    case VK_ADD:wcscpy(name,L"Keypad +");return 1;case VK_SUBTRACT:wcscpy(name,L"Keypad -");return 1;case VK_MULTIPLY:wcscpy(name,L"Keypad *");return 1;case VK_DIVIDE:wcscpy(name,L"Keypad /");return 1;case VK_DECIMAL:wcscpy(name,L"Keypad .");return 1;
+    }
+    return 0;
+}
+/* A key already on another action moves there in exchange (that action takes this
+   row's old key), so two actions never share one key. */
+static void capture_binding(WPARAM key,LPARAM lp){
+    if(key==VK_ESCAPE){binding=-1;return;}wchar_t name[40];
+    if(!binding_name(key,lp,name))return;
+    for(int i=0;i<RR_KEY_ACTIONS;i++)if(i!=binding&&!_wcsicmp(controls[i],name))wcscpy(controls[i],controls[binding]);
+    wcscpy(controls[binding],name);binding=-1;save_settings();
 }
 static LRESULT CALLBACK proc(HWND window,UINT msg,WPARAM wp,LPARAM lp){
     if(msg==WM_DESTROY){lb_close();lb_unmap();PostQuitMessage(0);return 0;}
@@ -977,6 +1023,8 @@ static LRESULT CALLBACK proc(HWND window,UINT msg,WPARAM wp,LPARAM lp){
     if(msg==WM_APP+2){online_ready_to_play((int)wp,(int)lp);InvalidateRect(window,NULL,FALSE);return 0;}
     if(msg==WM_APP+1){busy=0;if(wp){installed=1;artwork();page=selected=list_first=nav_depth=0;binding=-1;notice(L"GAME DATA INSTALLED \u2014 THE ORIGINAL DISC FILE IS NO LONGER REQUIRED");if(!preset_chosen)open_page(SETUP_PAGE);if(!preview_only)build_game();}else{wchar_t err[256];MultiByteToWideChar(CP_UTF8,0,error_text,-1,err,256);const wchar_t*why=err[0]?err:L"Game import failed. Your previous installation was preserved.";notice(why);MessageBoxW(mainwindow,why,L"Game import",MB_ICONWARNING);}return 0;}
     if(msg==WM_CHAR&&installed&&binding<0&&lb_chat_char(wp)){InvalidateRect(window,NULL,FALSE);return 0;}
+    /* Alt and F10 arrive as system keys: bindable like any other. */
+    if(msg==WM_SYSKEYDOWN&&installed&&binding>=0){capture_binding(wp,lp);InvalidateRect(window,NULL,FALSE);return 0;}
     if(msg==WM_KEYDOWN){
         int count=row_count();
         /* Ctrl+Shift+D shows or hides the Developer page (remembered). Not in
@@ -991,7 +1039,7 @@ static LRESULT CALLBACK proc(HWND window,UINT msg,WPARAM wp,LPARAM lp){
         if(busy==5&&wp==VK_ESCAPE){online_cancel();return 0;}   /* hosting / joining */
         if(installed&&binding<0&&lb_chat_key(wp)){InvalidateRect(window,NULL,FALSE);return 0;}   /* room chat box (lobby_page.h) */
         if(!installed){if(wp==VK_RETURN||wp==VK_SPACE)action();}
-        else if(binding>=0)capture_binding(wp);
+        else if(binding>=0)capture_binding(wp,lp);
         else if(wp==VK_ESCAPE||wp==VK_BACK)go_back();
         else if((wp==VK_UP||wp==VK_DOWN)&&count)selected=(selected+(wp==VK_DOWN?1:count-1))%count;
         else if(wp==VK_HOME||wp==VK_END)selected=wp==VK_HOME||!count?0:count-1;
@@ -1044,12 +1092,38 @@ static int validate_mdec_file(const wchar_t*path){
     while(ok&&pos<(size_t)length){if(b[pos]==0){for(size_t i=pos;i<(size_t)length;i++)if(b[i])ok=0;break;}if((size_t)length-pos<24||memcmp(b+pos,"MDEC",4)){ok=0;break;}unsigned n=be32(b+pos+4);if(n<24||n>(size_t)length-pos||++frames>256){ok=0;break;}Image im={0};if(!decode_mdec(b+pos,n,&im)){ok=0;break;}pixels+=(uint64_t)im.w*im.h;free(im.pixels);if(pixels>16777216){ok=0;break;}pos+=n;}
     free(b);return ok&&frames?0:16;
 }
+/* Command-line options for players (README "Command-line options"). The other
+ * switches parsed in wWinMain are for tests and development and aren't listed. */
+static const char cli_help[]=
+    "Jailbreak Recomp " RR_VERSION "\n"
+    "Usage: RoadRashJailbreak.exe [options]\n\n"
+    "  --play              Start the game straight away, without the launcher. The launcher\n"
+    "                      opens instead if the game isn't set up yet, or if you hold Shift.\n"
+    "                      It closes again when the game does.\n"
+    "  --launcher          Always open the launcher (even with Start-up: Straight to game).\n"
+    "  --fullscreen        Play full screen. Saved, like Options > Display > Window.\n"
+    "  --windowed          Play in a window. Saved, like Options > Display > Window.\n"
+    "  --no-update-check   Don't check GitHub for a new version this time.\n"
+    "  --version           Show the version.\n"
+    "  --help              Show this list.\n\n"
+    "Example (a shortcut, or Steam > Properties > Launch Options): --play --fullscreen\n";
+/* The launcher is a window program: print to the console it was started from (or
+ * to a redirected output); without one, show the text in a message box. */
+static void cli_print(const char*text){
+    HANDLE out=GetStdHandle(STD_OUTPUT_HANDLE);DWORD n;
+    if(out&&out!=INVALID_HANDLE_VALUE&&GetFileType(out)!=FILE_TYPE_UNKNOWN){WriteFile(out,text,(DWORD)strlen(text),&n,NULL);return;}
+    if(AttachConsole(ATTACH_PARENT_PROCESS)){HANDLE c=CreateFileW(L"CONOUT$",GENERIC_WRITE,FILE_SHARE_WRITE,NULL,OPEN_EXISTING,0,NULL);
+        if(c!=INVALID_HANDLE_VALUE){WriteFile(c,"\n",1,&n,NULL);WriteFile(c,text,(DWORD)strlen(text),&n,NULL);CloseHandle(c);FreeConsole();return;}FreeConsole();}
+    wchar_t w[4096];MultiByteToWideChar(CP_UTF8,0,text,-1,w,4096);MessageBoxW(NULL,w,APP_TITLE,MB_OK|MB_ICONINFORMATION);
+}
 int WINAPI wWinMain(HINSTANCE instance,HINSTANCE previous,PWSTR line,int show){
     (void)previous;(void)line;dpi_setup();GetModuleFileNameW(NULL,appdir,32768);PathRemoveFileSpecW(appdir);
-    workspace[0]=0;double preview_fps=60;
+    workspace[0]=0;double preview_fps=60;int cli_play=0,cli_window=-1,cli_no_update=0;   /* player options (cli_help) */
     wchar_t base[32768];GetEnvironmentVariableW(L"LOCALAPPDATA",base,32768);join(store,base,L"RoadRashJailbreak");wcscpy(default_store,store);
     int argc;wchar_t **argv=CommandLineToArgvW(GetCommandLineW(),&argc);const wchar_t *preview_path=NULL,*preview_motion=NULL,*import_path=NULL,*mod_operation=NULL,*mod_value=NULL;int room_test=0,room_test_n=0;const wchar_t*room_test_code=NULL;int find_game=0,settings_only=0,play_on_start=0,setup_on_start=0,preview_voice=0,net_test=0,net_test_port=0,online_start_on=0,second_instance=0,show_launcher=0;const wchar_t*net_test_address=NULL;
     for(int i=1;i<argc;i++){
+        if(!wcscmp(argv[i],L"--help")||!wcscmp(argv[i],L"-h")||!wcscmp(argv[i],L"/?")){cli_print(cli_help);LocalFree(argv);return 0;}
+        if(!wcscmp(argv[i],L"--version")){cli_print("Jailbreak Recomp " RR_VERSION "\n");LocalFree(argv);return 0;}
         if(!wcscmp(argv[i],L"--self-test")){LocalFree(argv);return decoder_test();}
         if(!wcscmp(argv[i],L"--validate-mdec-file")&&i+1<argc){int code=validate_mdec_file(argv[++i]);LocalFree(argv);return code;}
         if(!wcscmp(argv[i],L"--data-root")&&i+1<argc){GetFullPathNameW(argv[++i],32768,store,NULL);data_root_given=1;}
@@ -1084,6 +1158,9 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE previous,PWSTR line,int show){
         else if(!wcscmp(argv[i],L"--room-host")&&i+1<argc){room_test=1;room_test_n=_wtoi(argv[++i]);}
         else if(!wcscmp(argv[i],L"--room-join")&&i+1<argc){room_test=2;room_test_code=argv[++i];}
         else if(!wcscmp(argv[i],L"--find-game"))find_game=1;   /* after a game-folder change at the first import */
+        else if(!wcscmp(argv[i],L"--play"))cli_play=1;
+        else if(!wcscmp(argv[i],L"--fullscreen")||!wcscmp(argv[i],L"--windowed"))cli_window=!wcscmp(argv[i],L"--fullscreen");
+        else if(!wcscmp(argv[i],L"--no-update-check"))cli_no_update=1;
         else if(!wcscmp(argv[i],L"--launcher"))show_launcher=1;   /* always show the launcher (overrides Start-up: Straight to game) */
     }
     if(!data_root_given)folder_load();   /* install-location.txt (launcher_folder.h) */
@@ -1104,15 +1181,18 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE previous,PWSTR line,int show){
        a broken one is announced (its problems keep their built-in values). */
     if(installed&&!exists(tuning_path)&&tn_save(tuning_path,&tn_live))tuning_stamp=file_stamp(tuning_path);else tuning_load(1);
     HWND previous_window=second_instance?NULL:FindWindowW(L"RoadRashJailbreakLauncher",NULL);if(previous_window){ShowWindow(previous_window,SW_RESTORE);SetForegroundWindow(previous_window);LocalFree(argv);return 0;}
+    if(cli_window>=0){fullscreen_mode=cli_window;WritePrivateProfileStringW(L"display",L"fullscreen",fullscreen_mode?L"1":L"0",ini);}   /* --fullscreen / --windowed */
     WNDCLASSW wc={0};wc.lpfnWndProc=proc;wc.hInstance=instance;wc.lpszClassName=L"RoadRashJailbreakLauncher";wc.hIcon=LoadIconW(instance,MAKEINTRESOURCEW(101));wc.hCursor=LoadCursorW(NULL,IDC_ARROW);if(!RegisterClassW(&wc)){LocalFree(argv);return 12;}
     if(online_start_on&&!online_address[0])wcscpy(online_address,L"127.0.0.1");
     mainwindow=CreateWindowExW(0,wc.lpszClassName,APP_TITLE,WS_OVERLAPPEDWINDOW,CW_USEDEFAULT,CW_USEDEFAULT,1280,760,NULL,NULL,instance,NULL);if(!mainwindow){LocalFree(argv);return 13;}
     /* Start-up: Straight to game, once set up (game imported, preset chosen, game built). */
     {wchar_t built[32768];join(built,store,L"runtime\\RoadRashNativeResearch.exe");
-     if(start_game_directly&&installed&&preset_chosen&&exists(built)&&!show_launcher&&!(GetAsyncKeyState(VK_SHIFT)&0x8000)&&!play_on_start&&!setup_on_start&&!online_start_on&&!room_test&&page==0)quick_start=1;}
+     if((start_game_directly||cli_play)&&installed&&preset_chosen&&exists(built)&&!show_launcher&&!(GetAsyncKeyState(VK_SHIFT)&0x8000)&&!play_on_start&&!setup_on_start&&!online_start_on&&!room_test&&page==0)quick_start=1;}
+    /* --play before the game is built: the launcher opens and builds it, then plays. */
+    if(cli_play&&!quick_start&&installed&&preset_chosen&&!show_launcher&&!(GetAsyncKeyState(VK_SHIFT)&0x8000))play_on_start=1;
     place_main_window();SetTimer(mainwindow,1,500,NULL);SetTimer(mainwindow,2,50,NULL);SetTimer(mainwindow,4,6500,NULL);if(!quick_start){ShowWindow(mainwindow,show);UpdateWindow(mainwindow);}
     if(quick_start)play_game();
-    {uintptr_t t=_beginthreadex(NULL,0,update_cleanup_worker,NULL,0,NULL);if(t)CloseHandle((HANDLE)t);}update_check_daily();   /* launcher_update.h */
+    {uintptr_t t=_beginthreadex(NULL,0,update_cleanup_worker,NULL,0,NULL);if(t)CloseHandle((HANDLE)t);}if(!cli_no_update)update_check_daily();   /* launcher_update.h */
     if(installed&&!preset_chosen&&!play_on_start&&page==0)open_page(SETUP_PAGE);   /* first run: choose a preset */
     if(setup_on_start&&installed)build_game();
     if(find_game&&!installed)import_disc();

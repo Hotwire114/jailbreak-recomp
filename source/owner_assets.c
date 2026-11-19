@@ -63,7 +63,21 @@ const unsigned char*rr_owner_taunts(const wchar_t*path,unsigned*size){
  static unsigned char*bytes;static unsigned length;if(size)*size=0;if(bytes){if(size)*size=length;return bytes;}
  Disc d={0};Entry root,e;unsigned char*b=NULL;char hash[65];int valid=0;
  if(open_disc(path,&d,&root)&&find_file(&d,root,"/SLUS_010.53",&e)){b=read_entry(&d,e);valid=b&&sha256(b,e.size,hash)&&!strcmp(hash,"52a3e28b2f97e49d8122eb4f510041e64dce046fd8fa9d4cdc49f9e64ff66a7b");}free(b);
- if(valid&&find_file(&d,root,"/DATA/AUDTAUNT.STR",&e)&&e.size<=4*1024*1024){bytes=read_entry(&d,e);if(bytes)length=e.size;}if(d.fp)fclose(d.fp);if(size)*size=length;return bytes;
+ if(valid&&find_file(&d,root,"/DATA/AUDTAUNT.STR",&e)&&e.size<=4*1024*1024){bytes=read_entry(&d,e);if(bytes)length=e.size;}
+ /* The captains' own lines are not in AUDTAUNT.STR: the game streams them during
+  * races from the course stream DATA/STREAM1.STR (ids without bit 15, e.g.
+  * 0x0711: kind 0x11 = Cp Helmut, its second variant Lt Tasha; 0x10 = Cp Draco
+  * with Lt Bull). Their 15 distinct 16 KB blocks, at fixed offsets on the
+  * validated disc, are appended with bit 15 set on the id (set 0x81..) like the
+  * catalogue's own; a block whose id or kinds do not match is skipped. */
+ static const unsigned captains[]={78348288,9682944,58769408,13058048,55492608,23052288,   /* 0x10: sets 1 3 9 10 12 14 */
+  78413824,83623936,24313856,44400640,12910592,94715904,13090816,63160320,107167744};       /* 0x11: sets 1 3 5 7 8 9 10 14 17 */
+ if(bytes&&find_file(&d,root,"/DATA/STREAM1.STR",&e)){unsigned char*grown=realloc(bytes,length+sizeof captains/sizeof*captains*0x4000u);if(grown){bytes=grown;
+  for(unsigned i=0;i<sizeof captains/sizeof*captains;i++){unsigned char*b=bytes+length;unsigned ok=captains[i]%2048==0&&captains[i]+0x4000u<=e.size;
+   for(unsigned s=0;ok&&s<8;s++)ok=sector(&d,e.lba+captains[i]/2048+s,b+s*2048);
+   uint32_t id=ok?le32(b):0,kind=id&255,set=id>>8&255;if(!ok||(id&0xffff0000u)!=0xa0000000u||set<1||set>27||(kind!=0x10&&kind!=0x11)||le32(b+0x20)!=kind)continue;
+   b[1]=(unsigned char)(0x80+set);length+=0x4000;}}}
+ if(d.fp)fclose(d.fp);if(size)*size=length;return bytes;
 }
 /* The race soundtrack album, /DATA/ALBUM.ALB on the owner's disc (63.5 MB,
  * read in pieces, never stored): raw PS1 ADPCM, 8 KB of the left channel then
@@ -86,13 +100,15 @@ unsigned rr_owner_album_read(const wchar_t*path,unsigned offset,unsigned char*ou
  * second variant of the 0x20/0x21 blocks; the gangs share kind 4 / 5, the
  * variants of the kind 4 block; cops 7). launcher.ini [audio] voice1/voice2
  * hold an index into this table, 0 = the race's own voice. */
-/* The disc has six AI voices; the other riders share them as the game itself
- * assigns them (speech code 0x8001A9CC: a profile whose kind has no block
- * falls back to kind 4 + (profile & 3), the gang voice). Every rider is listed
- * by name; the first ten keep their old index. */
+/* The disc has eight AI voices: these six plus the captains, Cp Draco (kind
+ * 0x10) and Cp Helmut (0x11), whose blocks come from DATA/STREAM1.STR (see
+ * rr_owner_taunts). The other riders share them as the game itself assigns them
+ * (speech code 0x8001A9CC: the profile's own kind first, then kind
+ * 4 + (profile & 3), the gang voice). Every rider is listed by name; the first
+ * ten keep their old index. */
 static const struct {const char*name;unsigned char kind,variant;} voices[]={{"Original",0,0},
  {"Lt Tasha",0x21,0},{"Lt Bull",0x20,0},{"Gr Jork",0x21,1},{"Gr Mongo",0x20,1},{"Gator's gang",4,0},{"Aldente's gang",4,1},{"Cop",7,2},{"Player 1 rider",6,2},{"Player 2 rider",0x16,0},
- {"Cp Draco",4,0},{"Cp Helmut",4,1},{"Gator",4,0},{"Aldente",4,1},{"Zed",4,0},{"Sergio",4,1},{"Tiny",4,0},{"Huang",4,1},{"Scar",4,0},{"Scooter",4,1},{"Kahura",4,1}};
+ {"Cp Draco",0x10,0},{"Cp Helmut",0x11,0},{"Gator",4,0},{"Aldente",4,1},{"Zed",4,0},{"Sergio",4,1},{"Tiny",4,0},{"Huang",4,1},{"Scar",4,0},{"Scooter",4,1},{"Kahura",4,1}};
 int rr_voice_canonical(int v){int n=(int)(sizeof voices/sizeof*voices);if(v<=0||v>=n)return 0;for(int i=1;i<v;i++)if(voices[i].kind==voices[v].kind&&voices[i].variant==voices[v].variant)return i;return v;}
 const char*rr_voice_name(int v){return v>0&&v<(int)(sizeof voices/sizeof*voices)?voices[v].name:voices[0].name;}
 /* variant 2: both variants of the block are the same character. */
@@ -127,7 +143,13 @@ unsigned rr_adpcm_decode(const unsigned char*a,unsigned bytes,short*out,unsigned
  * outfit gives the player that rider's model, texture and palette. Outfits
  * are named by the riders' voice characters (profile ids as in rr_voice_role's
  * table: Lt Tasha 0x21, Lt Bull 0x20, Gr Jork 0x51, Gr Mongo 0x50). */
-static const struct {const char*name;short hue;} paints[]={{"Original",-1},{"Red",0},{"Orange",28},{"Yellow",54},{"Green",125},{"Blue",220},{"Purple",275},{"Pink",325}};
+static const struct {const char*name;short hue,scheme;} paints[]={{"Original",-1,-1},{"Red",0,-1},{"Orange",28,-1},{"Yellow",54,-1},{"Green",125,-1},{"Blue",220,-1},{"Purple",275,-1},{"Pink",325,-1},
+ /* The game's own bike paint schemes (race palette slots, PBNK of every BBLEVEL*.TEX;
+  * the same six bike palettes in all five files). Seen on AI bikes in a Jail Break
+  * race: 0 DeSades grunts, 2 Kaffe grunts, 3 Kaffe captain / lieutenant; 13 and 27
+  * on no bike there. The player gets the bike's own colours (Time Trial) or slot 1
+  * (DeSades captain / lieutenant, Jail Break), never these. */
+ {"DeSades khaki",-1,0},{"Kaffe red-blue",-1,2},{"Kaffe gold",-1,3},{"Blue and cream",-1,13},{"Olive",-1,27}};
 static const struct {const char*name;uint32_t rgb;} tags[]={{"Original",0},{"White",0xFFFFFF},{"Yellow",0xFFE628},{"Orange",0xFF8C14},{"Red",0xFF3228},{"Green",0x3CFF50},{"Cyan",0x3CE6FF},{"Pink",0xFF5AC8}};
 /* Outfits by gang and rank: a rider model (race model table 0x800CE1B0 entry:
  * 3 = DeSades body, 4 = Kaffe Boys body), an outfit texture set (texture table
@@ -146,12 +168,13 @@ static const struct {const char*name;unsigned char model,set,slot,profile;} outf
  * into palette slots 0-28 of every race), copied into the player's slot.
  * Slots 4-12 are the gangs' and police colours, 14-28 schemes no rider in the
  * checked races wears (UNUSED-CONTENT.md, section 6). */
-static const unsigned char colour_slots[]={0,4,5,6,7,8,9,10,11,12,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28};
+static const unsigned char colour_slots[]={0,4,5,6,7,8,9,10,11,12,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,RR_BUILTIN_SLOT};
 static const char*const colour_names[]={"Original","Kaffe 1","Kaffe 2","Kaffe Lt","Kaffe Captain","DeSades 1","DeSades 2","DeSades Lt","DeSades Captain","Police",
- "Scheme 1","Scheme 2","Scheme 3","Scheme 4","Scheme 5","Scheme 6","Scheme 7","Scheme 8","Scheme 9","Scheme 10","Scheme 11","Scheme 12","Scheme 13","Scheme 14","Scheme 15"};
+ "Scheme 1","Scheme 2","Scheme 3","Scheme 4","Scheme 5","Scheme 6","Scheme 7","Scheme 8","Scheme 9","Scheme 10","Scheme 11","Scheme 12","Scheme 13","Scheme 14","Scheme 15","White and red"};
 int rr_look_count(int kind){return kind==RR_LOOK_PAINT?(int)(sizeof paints/sizeof*paints):kind==RR_LOOK_TAG?(int)(sizeof tags/sizeof*tags):kind==RR_LOOK_COLOUR?(int)sizeof colour_slots:(int)(sizeof outfits/sizeof*outfits);}
 const char*rr_look_name(int kind,int v){if(v<0||v>=rr_look_count(kind))v=0;return kind==RR_LOOK_PAINT?paints[v].name:kind==RR_LOOK_TAG?tags[v].name:kind==RR_LOOK_COLOUR?colour_names[v]:outfits[v].name;}
 int rr_paint_hue(int v){return v>0&&v<rr_look_count(RR_LOOK_PAINT)?paints[v].hue:-1;}
+int rr_paint_scheme(int v){return v>0&&v<rr_look_count(RR_LOOK_PAINT)?paints[v].scheme:-1;}
 uint32_t rr_tag_rgb(int v){return v>0&&v<rr_look_count(RR_LOOK_TAG)?tags[v].rgb:0;}
 int rr_outfit_look(int v,int*model,int*set,int*slot,int*profile){if(v<=0||v>=rr_look_count(RR_LOOK_OUTFIT))return 0;*model=outfits[v].model;*set=outfits[v].set;*slot=outfits[v].slot;*profile=outfits[v].profile;return 1;}
 int rr_colour_slot(int v){return v>0&&v<rr_look_count(RR_LOOK_COLOUR)?colour_slots[v]:-1;}
@@ -164,15 +187,18 @@ int rr_colour_slot(int v){return v>0&&v<rr_look_count(RR_LOOK_COLOUR)?colour_slo
  * BBLEVEL1-3), a 128x60 sheet for the Kaffe Boys body with its own 128 colours
  * at LECT +0x2C (not a PBNK palette). Read from the owner's disc only. */
 static unsigned char spaz_tex[128*60];static uint16_t spaz_pal[128];static int spaz_ok;
+static uint16_t builtin_pal[128];static int builtin_ok;   /* rider textures' own colours (rr_builtin_colours) */
+static void load_builtin(const unsigned char*b,unsigned size){if(builtin_ok)return;for(unsigned p=0x3014;p+568+128*60<=size;p++)if(!memcmp(b+p,"LECT",4)&&le32(b+p+4)==0x2038&&b[p+12]==1&&b[p+16]==1){for(int i=0;i<128;i++)builtin_pal[i]=(uint16_t)le16(b+p+0x2C+2*i);builtin_ok=1;break;}}
 static void load_spaz(Disc*d,Entry root){Entry e;if(spaz_ok||!find_file(d,root,"/DATA/BBLEVJBD.TEX",&e)||e.size<0x3014||e.size>512*1024)return;unsigned char*b=read_entry(d,e);if(!b)return;
  for(unsigned p=0x3014;p+568+128*60<=e.size;p++)if(!memcmp(b+p,"LECT",4)&&le32(b+p+4)==0x2038&&b[p+16]==RR_SPAZ_TEXTURE&&le16(b+p+18)==128&&le16(b+p+20)==60){
   memcpy(spaz_tex,b+p+568,sizeof spaz_tex);for(int i=0;i<128;i++)spaz_pal[i]=(uint16_t)le16(b+p+0x2C+2*i);spaz_ok=1;for(int i=0;i<128*60;i++)if(spaz_tex[i]>127)spaz_ok=0;break;}
- free(b);}
+ load_builtin(b,e.size);free(b);}
 int rr_spaz_look(const wchar_t*path,const unsigned char**tex,const uint16_t**pal){
  static int tried;if(!spaz_ok&&!tried&&path){tried=1;Disc d={0};Entry root,e;unsigned char*b=NULL;char hash[65];int valid=0;
   if(open_disc(path,&d,&root)&&find_file(&d,root,"/SLUS_010.53",&e)){b=read_entry(&d,e);valid=b&&sha256(b,e.size,hash)&&!strcmp(hash,"52a3e28b2f97e49d8122eb4f510041e64dce046fd8fa9d4cdc49f9e64ff66a7b");}free(b);
   if(valid)load_spaz(&d,root);if(d.fp)fclose(d.fp);}
  if(!spaz_ok)return 0;if(tex)*tex=spaz_tex;if(pal)*pal=spaz_pal;return 1;}
+int rr_builtin_colours(const wchar_t*path,const uint16_t**pal){if(!builtin_ok)rr_spaz_look(path,NULL,NULL);if(!builtin_ok)return 0;if(pal)*pal=builtin_pal;return 1;}
 static void load_look_textures(Disc*d,Entry root){Entry e;load_spaz(d,root);if(!find_file(d,root,"/DATA/BBLEVEL1.TEX",&e)||e.size<0x3014||e.size>512*1024)return;free(look_tex);look_tex=read_entry(d,e);look_size=look_tex?e.size:0;
  if(look_tex&&(memcmp(look_tex,"KNBP",4)||le32(look_tex+4)!=0x3014)){free(look_tex);look_tex=NULL;look_size=0;}}
 #include "rider_model.h"
@@ -181,15 +207,17 @@ static void load_look_textures(Disc*d,Entry root){Entry e;load_spaz(d,root);if(!
 int rr_look_preview3d(int outfit,int colour,int paint,double yaw,uint32_t*rgb,unsigned w,unsigned h,int ss){
  static const unsigned char set_ids[]={52,51,4,3,2,1,56};   /* texture sets 8-14 */
  int model=3,set=13,slot=8,profile=0;rr_outfit_look(outfit,&model,&set,&slot,&profile);
- if(set==RR_SPAZ_SET){if(!spaz_ok)return 0;rm_tex_override=spaz_tex;rm_pal_override=spaz_pal;int ok=rm_render(1,0,0,rr_paint_hue(paint),yaw,rgb,w,h,ss);rm_tex_override=NULL;rm_pal_override=NULL;return ok;}
+ if(set==RR_SPAZ_SET){if(!spaz_ok)return 0;rm_tex_override=spaz_tex;rm_pal_override=spaz_pal;rm_bike_scheme=rr_paint_scheme(paint);int ok=rm_render(1,0,0,rr_paint_hue(paint),yaw,rgb,w,h,ss);rm_tex_override=NULL;rm_pal_override=NULL;rm_bike_scheme=-1;return ok;}
  int c=rr_colour_slot(colour);if(c>=0)slot=c;
- if(set<8||set>14||slot<0||slot>28)return 0;
- return rm_render(model==4,set_ids[set-8],slot,rr_paint_hue(paint),yaw,rgb,w,h,ss);
+ if(slot==RR_BUILTIN_SLOT){if(!builtin_ok)return 0;slot=0;rm_pal_override=builtin_pal;}   /* White and red */
+ if(set<8||set>14||slot<0||slot>28){rm_pal_override=NULL;return 0;}
+ rm_bike_scheme=rr_paint_scheme(paint);int ok=rm_render(model==4,set_ids[set-8],slot,rr_paint_hue(paint),yaw,rgb,w,h,ss);rm_bike_scheme=-1;rm_pal_override=NULL;return ok;
 }
 int rr_look_preview(int outfit,int colour,uint32_t*rgb,unsigned w,unsigned h){
  static const unsigned char set_ids[]={52,51,4,3,2,1,56};   /* texture sets 8-14 */
  if(!look_tex||!rgb||!w||!h)return 0;
  int model=3,set=13,slot=8,profile=0;rr_outfit_look(outfit,&model,&set,&slot,&profile);int c=rr_colour_slot(colour);if(c>=0)slot=c;
+ const int builtin=slot==RR_BUILTIN_SLOT;if(builtin){if(!builtin_ok)return 0;slot=0;}
  if(set<8||set>14||slot<0||slot>28)return 0;
  const unsigned char*tex=NULL;for(unsigned p=0x3014;p+568+128*60<=look_size;p++)if(!memcmp(look_tex+p,"LECT",4)&&look_tex[p+16]==set_ids[set-8]){tex=look_tex+p+568;break;}
  if(!tex)return 0;const unsigned char*pal=look_tex+0x14+((15-slot/3)*384+(slot%3)*128)*2;
@@ -197,7 +225,7 @@ int rr_look_preview(int outfit,int colour,uint32_t*rgb,unsigned w,unsigned h){
  const double scale=(double)w/128<(double)h/60?(double)w/128:(double)h/60;const unsigned dw=(unsigned)(128*scale),dh=(unsigned)(60*scale),ox=(w-dw)/2,oy=(h-dh)/2;
  for(unsigned i=0;i<w*h;i++)rgb[i]=0xff000000u;
  for(unsigned y=0;y<dh;y++)for(unsigned x=0;x<dw;x++){unsigned sx=(unsigned)(x/scale),sy=(unsigned)(y/scale);if(sx>127)sx=127;if(sy>59)sy=59;unsigned i=tex[sy*128+sx];if(i>127)i=0;
-  unsigned v=pal[i*2]|pal[i*2+1]<<8;rgb[(oy+y)*w+ox+x]=0xff000000u|((v&31)*255/31)<<16|((v>>5&31)*255/31)<<8|(v>>10&31)*255/31;}
+  unsigned v=builtin?builtin_pal[i]:(unsigned)(pal[i*2]|pal[i*2+1]<<8);rgb[(oy+y)*w+ox+x]=0xff000000u|((v&31)*255/31)<<16|((v>>5&31)*255/31)<<8|(v>>10&31)*255/31;}
  return 1;
 }
 /* The launcher draws the owner's original FNTP glyphs and SHPP bars. */

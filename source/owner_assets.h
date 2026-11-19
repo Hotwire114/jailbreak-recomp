@@ -47,7 +47,8 @@ unsigned rr_owner_album_read(const wchar_t *disc,unsigned offset,unsigned char *
 enum {RR_LOOK_PAINT,RR_LOOK_TAG,RR_LOOK_OUTFIT,RR_LOOK_COLOUR,RR_LOOK_KINDS};
 int rr_look_count(int kind);
 const char *rr_look_name(int kind,int value);
-int rr_paint_hue(int value);          /* degrees, -1 = original */
+int rr_paint_hue(int value);          /* degrees, -1 = original or a scheme */
+int rr_paint_scheme(int value);       /* one of the game's bike paint schemes: its race palette slot, else -1 */
 uint32_t rr_tag_rgb(int value);       /* 0xRRGGBB, 0 = original */
 /* An outfit's race model table entry, texture set, the rank's palette slot and a
  * rider profile id of that rank (whose build is used when one is in the race); 0 = original. */
@@ -58,7 +59,12 @@ int rr_outfit_look(int value,int *model,int *set,int *slot,int *profile);
 #define RR_SPAZ_SET 99
 #define RR_SPAZ_TEXTURE 151
 int rr_spaz_look(const wchar_t *disc,const unsigned char **tex,const uint16_t **pal);
-int rr_colour_slot(int value);        /* the race palette slot (0-28) copied to the player, -1 = original */
+int rr_colour_slot(int value);        /* the race palette slot (0-28) copied to the player, -1 = original, RR_BUILTIN_SLOT = built-in */
+/* "White and red": the 128 colours every rider texture (LECT 1-4, 51, 52, 56)
+ * carries at +0x2C, which no rider wears (races use PBNK slots). From the
+ * owner's disc like Spaz's; 0 when unavailable. */
+#define RR_BUILTIN_SLOT 200
+int rr_builtin_colours(const wchar_t *disc,const uint16_t **pal);
 /* The outfit's texture sheet in the chosen colours, fitted into w x h 0xAARRGGBB; 0 if unavailable. */
 int rr_look_preview(int outfit,int colour,uint32_t *rgb,unsigned w,unsigned h);
 /* 3D rider preview (rider_model.h): the rider on the bike, turned yaw degrees,

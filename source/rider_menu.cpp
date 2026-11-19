@@ -436,7 +436,10 @@ bool rider_menu_font(CPUState*c){
         int count=music_track_count(),pages=(count+4)/5;if(jukebox_page>=pages)jukebox_page=0;
         for(int i=0;i<5;i++)music_track_label(jukebox_page*5+i,text[i],25);
         // Button names follow Player 1's keys / controller (controls_screen.cpp): 13 Select, 4 Square.
-        std::snprintf(text[5],32,"%s: %s / F7: Add",rrpc::controls_button_name(13),custom?"Original":"Custom");
+        // The import key is the player's (launcher, default F7), shortened to fit the 31-character line.
+        const char*mk=rrpc::rider_options().music_key;char mk_short[24];std::snprintf(mk_short,24,!std::strncmp(mk,"Keypad ",7)?"Num %s":"%s",!std::strncmp(mk,"Keypad ",7)?mk+7:mk);
+        if(mk[0])std::snprintf(text[5],32,"%s: %s / %s: Add",rrpc::controls_button_name(13),custom?"Original":"Custom",mk_short);
+        else std::snprintf(text[5],32,"%s: %s",rrpc::controls_button_name(13),custom?"Original":"Custom");
         if(custom)std::snprintf(text[6],32,"Custom library %d/%d",jukebox_page+1,pages?pages:1);else std::strcpy(text[6],"Original soundtrack");
         std::snprintf(text[7],32,"%s: Play   Left/Right: Page",rrpc::controls_button_name(4));
         auto*r=memory_get_ram_ptr()+(borrowed&0x1fffff);std::memcpy(r,text,sizeof text);std::memcpy(borrowed_current,r,256);
@@ -506,6 +509,13 @@ bool rider_menu_font(CPUState*c){
 void rider_menu_observe(uint32_t pc){(void)pc;}
 
 }
+// The PC menu / music import keys chosen in the launcher (rider-options.ini [pc],
+// SDL scancode names; default F6 / F7; empty: no key). Matched by key position,
+// as keybinds.ini is, so the launcher keeps them apart from every game key.
+static bool pc_key(const SDL_Event*event,const char*name){
+    if(!name||!name[0])return false;const SDL_Scancode sc=SDL_GetScancodeFromName(name);
+    return sc!=SDL_SCANCODE_UNKNOWN&&event->key.scancode==sc;
+}
 extern "C" bool SDLCALL __wrap_SDL_PollEvent(SDL_Event*event){
     if(rrpc::rider_options().menu){rrpc::pc_tick(racing(),paused());rrpc::quick_tick();rrpc::look_tick();}
     // Original game options: an opt-in frame rate (the same race timing as
@@ -526,11 +536,11 @@ extern "C" bool SDLCALL __wrap_SDL_PollEvent(SDL_Event*event){
         if(rrpc::showroom_event(*event))continue;
         if(rrpc::rider_options().original_quit&&event->type==SDL_EVENT_KEY_DOWN&&!event->key.repeat&&event->key.key==SDLK_ESCAPE){event->type=SDL_EVENT_QUIT;return true;}
         if(open&&!available())close();
-        if(!open&&rrpc::rider_options().menu&&!rrpc::netplay()&&jukebox_context()&&event->type==SDL_EVENT_KEY_DOWN&&!event->key.repeat&&event->key.key==SDLK_F7){rrpc::music_import();continue;}
+        if(!open&&rrpc::rider_options().menu&&!rrpc::netplay()&&jukebox_context()&&event->type==SDL_EVENT_KEY_DOWN&&!event->key.repeat&&pc_key(event,rrpc::rider_options().music_key)){rrpc::music_import();continue;}
 #ifndef RR_PUBLIC_RELEASE   // the public release has no editors
         if(event->type==SDL_EVENT_KEY_DOWN&&event->key.key==SDLK_F2&&!event->key.repeat&&rrpc::rider_options().menu&&!rrpc::netplay()){rrpc::game_editor_toggle();continue;}   // in-game editor (game_editor.cpp)
 #endif
-        if(event->type==SDL_EVENT_KEY_DOWN&&event->key.key==SDLK_F6&&!event->key.repeat&&rrpc::rider_options().menu&&(main_menu()||paused())){if(open)close(main_menu());else start(!main_menu());continue;}
+        if(event->type==SDL_EVENT_KEY_DOWN&&pc_key(event,rrpc::rider_options().menu_key)&&!event->key.repeat&&rrpc::rider_options().menu&&(main_menu()||paused())){if(open)close(main_menu());else start(!main_menu());continue;}
         if(!open)return true;
         if(event->type==SDL_EVENT_KEY_DOWN){
             const auto key=event->key.key;
@@ -568,6 +578,7 @@ extern "C" void __wrap_sio_set_pad_state_slot(int slot,uint16_t buttons){
     if(slot==0)buttons=rrpc::intro_skip_filter(buttons);
     {uint16_t out;if(rrpc::showroom_pad(slot,buttons,out)){if(slot==0)last_buttons=buttons;__real_sio_set_pad_state_slot(slot,out);return;}}
     if(slot==0)buttons=rrpc::jail_pad(buttons);   // Jail Break's Weapon row (jailbreak_you.cpp)
+    if(slot==0)buttons=rrpc::random_pad(buttons);   // Time Trials > Race Options: Random riders (rider_enhancements.cpp)
     if(slot==1&&rrpc::rider_options().menu&&(open||SDL_GetTicks()<bypass_until)){__real_sio_set_pad_state_slot(slot,0xffff);return;}
     if(slot==1){
         // Pad 2 moves the root menu too: its Cross / Start leaves on the game's own tables.

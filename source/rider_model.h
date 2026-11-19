@@ -115,7 +115,7 @@ static void rm_load(Disc*d,Entry root){
 }
 static void rm_free(void){free(rm.geo);free(rm.anim);free(rm.tables);memset(&rm,0,sizeof rm);}
 static const unsigned char*rm_lect(unsigned id,const unsigned char**pal){
- for(unsigned p=0x3014;p+568+128*60<=look_size;p++)if(!memcmp(look_tex+p,"LECT",4)&&le32(look_tex+p+4)==0x2038&&look_tex[p+16]==id){if(pal)*pal=look_tex+p+0x38;return look_tex+p+568;}
+ for(unsigned p=0x3014;p+568+128*60<=look_size;p++)if(!memcmp(look_tex+p,"LECT",4)&&le32(look_tex+p+4)==0x2038&&look_tex[p+16]==id){if(pal)*pal=look_tex+p+0x2C;return look_tex+p+568;}   /* colours at +0x2C (as uploaded to VRAM) */
  return NULL;
 }
 
@@ -173,6 +173,8 @@ static void rm_tri(const RmVtx*a,const RmVtx*b,const RmVtx*c,const RmMat*mt,uint
 /* A rider sheet and its 128 colours used instead of set_id / slot (Spaz:
  * owner_assets.c rr_look_preview3d sets these around one rm_render call). */
 static const unsigned char*rm_tex_override;static const uint16_t*rm_pal_override;
+/* A bike paint scheme: the bike drawn in that PBNK slot's colours (rr_paint_scheme). */
+static int rm_bike_scheme=-1;
 static int rm_render(int body,unsigned set_id,int slot,int paint_hue,double yaw,uint32_t*out,unsigned w,unsigned h,int ss){
  if(!rm.ready||!look_tex||!out||!w||!h||w>2048||h>2048)return 0;if(ss<1)ss=1;if(ss>3)ss=3;
  const RmModel*rider=rm.rider+(body!=0),*bike=&rm.bike;
@@ -214,7 +216,8 @@ static int rm_render(int body,unsigned set_id,int slot,int paint_hue,double yaw,
  if(!rmat.tex||!bmat.tex){free(P);free(N);free(px);free(zb);free(sv);return 0;}
  if(rm_pal_override)for(int i=0;i<256;i++){unsigned v=i<128?rm_pal_override[i]:0;rmat.pal[i]=(v&0x7fff)?rm_rgb(v):0;}
  else{const unsigned char*pal=look_tex+0x14+((15-slot/3)*384+(slot%3)*128)*2;for(int i=0;i<256;i++){unsigned v=i<128?(unsigned)(pal[i*2]|pal[i*2+1]<<8):0;rmat.pal[i]=(v&0x7fff)?rm_rgb(v):0;}}
- {uint16_t pal[256];for(int i=0;i<256;i++)pal[i]=(uint16_t)(bpal[i*2]|bpal[i*2+1]<<8);if(paint_hue>=0)rm_paint(pal,128,bmat.tex,paint_hue);for(int i=0;i<256;i++)bmat.pal[i]=(pal[i]&0x7fff)?rm_rgb(pal[i]):0;}
+ {uint16_t pal[256];for(int i=0;i<256;i++)pal[i]=(uint16_t)(bpal[i*2]|bpal[i*2+1]<<8);
+  if(rm_bike_scheme>=0&&rm_bike_scheme<29){const unsigned char*s=look_tex+0x14+((15-rm_bike_scheme/3)*384+(rm_bike_scheme%3)*128)*2;for(int i=0;i<128;i++)pal[i]=(uint16_t)(s[i*2]|s[i*2+1]<<8);}if(paint_hue>=0)rm_paint(pal,128,bmat.tex,paint_hue);for(int i=0;i<256;i++)bmat.pal[i]=(pal[i]&0x7fff)?rm_rgb(pal[i]):0;}
  /* Faces. */
  for(int m=0;m<2;m++){const RmModel*mo=m?bike:rider;unsigned base=m?rider->nv:0;
   for(unsigned g=0;g<mo->np;g++)for(unsigned k=0;k<mo->part[g].nf;k++){const unsigned char*fc=mo->part[g].faces+20*k;unsigned A=le16(fc+2),corners=(A>>11&7)==3?3:4;

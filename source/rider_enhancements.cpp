@@ -43,12 +43,16 @@ static void load_options(){
     wchar_t*slash=wcsrchr(path,L'\\');if(!slash)return;wcscpy(slash+1,L"rider-options.ini");
     wcscpy(options_path,path);wcscpy(slash+1,L"..\\launcher.ini");GetFullPathNameW(path,32768,launcher_path,nullptr);
     options.menu=GetPrivateProfileIntW(L"pc",L"in_game_menu",0,options_path)!=0;
+    // PC keys the launcher lets the player choose (SDL scancode names; empty = none).
+    {wchar_t v[24];GetPrivateProfileStringW(L"pc",L"menu_key",L"F6",v,24,options_path);for(int i=0;i<24;i++)options.menu_key[i]=v[i]<128?(char)v[i]:'?';
+     GetPrivateProfileStringW(L"pc",L"music_key",L"F7",v,24,options_path);for(int i=0;i<24;i++)options.music_key[i]=v[i]<128?(char)v[i]:'?';}
     if(!options.menu){options.original_rate=GetPrivateProfileIntW(L"original",L"frame_rate",0,options_path);if(options.original_rate<0||options.original_rate>2)options.original_rate=0;
         options.original_quit=GetPrivateProfileIntW(L"original",L"esc_quits",0,options_path)!=0;}
     options.names=GetPrivateProfileIntW(L"riders",L"rename",0,options_path)!=0;
     options.hd=GetPrivateProfileIntW(L"display",L"hd_ui",1,launcher_path)!=0;
     for(int i=0;i<2;i++){wchar_t key[12];swprintf(key,12,L"voice%d",i+1);options.voice[i]=GetPrivateProfileIntW(L"audio",key,0,launcher_path);if(options.voice[i]<0||options.voice[i]>27)options.voice[i]=0;}
     options.large=GetPrivateProfileIntW(L"hud",L"larger_text",0,options_path)!=0;
+    options.random_riders=GetPrivateProfileIntW(L"riders",L"random",0,launcher_path)!=0;   // Time Trial's random riders, off by default
     for(int i=0;i<2;i++){const wchar_t*keys[]={L"paint",L"tag",L"outfit",L"colour"};int*values[]={options.paint,options.tag,options.outfit,options.colour};
         for(int k=0;k<RR_LOOK_KINDS;k++){wchar_t key[12];swprintf(key,12,L"%ls%d",keys[k],i+1);int v=GetPrivateProfileIntW(L"riders",key,0,launcher_path);values[k][i]=v>0&&v<rr_look_count(k)?v:0;}}
     for(unsigned i=0;i<2;i++){
@@ -84,6 +88,7 @@ bool save_rider_options(const RiderOptions&next){
         for(int i=0;i<2;i++){wchar_t key[12],value[12];swprintf(key,12,L"voice%d",i+1);swprintf(value,12,L"%d",next.voice[i]);ok=WritePrivateProfileStringW(L"audio",key,value,path)&&ok;}
         ok=WritePrivateProfileStringW(L"hud",L"larger_text",next.large?L"1":L"0",path)&&ok;
         ok=WritePrivateProfileStringW(L"riders",L"rename",next.names?L"1":L"0",path)&&ok;
+        ok=WritePrivateProfileStringW(L"riders",L"random",next.random_riders?L"1":L"0",path)&&ok;
         for(int i=0;i<2;i++){const wchar_t*keys[]={L"paint",L"tag",L"outfit",L"colour"};const int*values[]={next.paint,next.tag,next.outfit,next.colour};
             for(int k=0;k<RR_LOOK_KINDS;k++){wchar_t key[12],value[12];swprintf(key,12,L"%ls%d",keys[k],i+1);swprintf(value,12,L"%d",values[k][i]);ok=WritePrivateProfileStringW(L"riders",key,value,path)&&ok;}}
         for(unsigned i=0;i<2;i++){wchar_t key[8],text[9]{};swprintf(key,8,L"name%u",i+1);for(unsigned j=0;next.name[i][j];j++)text[j]=next.name[i][j];ok=WritePrivateProfileStringW(L"riders",key,text,path)&&ok;}
@@ -330,6 +335,27 @@ static bool palette_xy(unsigned k,unsigned players,int&x,int&y,unsigned&m){
     uint32_t t=0x80053254+0xB0*(players-1);unsigned n=byte_at(t+0x74);m=byte_at(t+0x76);if(!n||!m||m>128)return false;
     x=half(t+0x70)+(int)(k%n*m)+640;y=511-(int)(k/3);return x>=0&&x+(int)m<=1024&&y>=0;
 }
+//  Paint schemes (rr_paint_scheme): the bike in one of the game's own bike
+//  palettes. Every race uploads the BBLEVEL*.TEX palette bank into slots 0-28,
+//  and its six bike palettes (0-3, 13, 27) are the same in every file, so the
+//  chosen slot's colours are copied into the player's own bike slot: no AI bike
+//  changes, and the showroom's Original puts the bike's own colours back
+//  (unpaint_bike). Bike textures share one ramp layout, so a scheme fits every
+//  rideable bike (the white police bikes are never the player's).
+static void paint_bike_scheme(uint32_t rec,unsigned players,int scheme){
+    uint32_t w24=word(rec+0x24);if(!(w24&0x400)||(w24&0x800)||scheme<0||scheme>28)return;
+    int x,y,sx,sy;unsigned m,m2;if(!palette_xy(w24>>12&63,players,x,y,m)||!palette_xy((unsigned)scheme,players,sx,sy,m2)||m2!=m)return;
+    Seen&c=seen[rec==seat_record(0)?0:1];uint16_t now[128],want[128];
+    for(unsigned i=0;i<m;i++){now[i]=gpu_vram_peek_cpu(x+(int)i,y);want[i]=gpu_vram_peek_cpu(sx+(int)i,sy);}
+    const unsigned index=(uint16_t)half(rec+0x4A);
+    if(!c.valid||c.rec!=rec||c.x!=x||c.y!=y||c.index!=index||std::memcmp(now,c.written,m*2)){c={rec,x,y,index,{},{},{},true};std::memcpy(c.original,now,m*2);}   // the game's own palette
+    std::memcpy(c.written,want,m*2);
+    if(!std::memcmp(now,want,m*2))return;
+    gpu_write_gp0(0xA0000000u);gpu_write_gp0((uint32_t)y<<16|(uint32_t)x);gpu_write_gp0(1u<<16|m);
+    for(unsigned i=0;i<m;i+=2)gpu_write_gp0(want[i]|(uint32_t)(i+1<m?want[i+1]:0)<<16);
+    psx_mod_counter_add("rr.look.scheme_writes",1);
+    if(rrpc::netplay()&&gl_renderer_cpu_auth_dual())gl_renderer_restage_vram_after_savestate();
+}
 //  Outfit (gang and rank, owner_assets.c outfits): the player's rider object
 //  (record +0x38) gets that body's model table entry (0x800CE1B0 + 16 * model,
 //  id 0x96 DeSades / 0x9F Kaffe Boys; +8 = -1 so the per-view LOD swap
@@ -399,7 +425,10 @@ static void dress_rider(uint32_t rec,unsigned players,unsigned seat,int outfit,i
         if(changed)psx_mod_counter_add("rr.look.outfit_writes",1);
     }
     // Colours.
-    const int chosen=rr_colour_slot(colour),source=chosen>=0?chosen:dressed?slot:-1;
+    int chosen=rr_colour_slot(colour);
+    if(chosen==RR_BUILTIN_SLOT){   // White and red: the rider textures' own colours, from the disc
+        const uint16_t*b=nullptr;if(!spaz_pal&&rr_builtin_colours(disc_path(),&b))spaz_pal=b;chosen=-1;}
+    const int source=chosen>=0?chosen:dressed?slot:-1;
     struct Kept{uint32_t rec;int x,y;uint16_t original[128];bool valid;};static Kept kept[2];
     int dx,dy,sx,sy;unsigned m,m2;if(!palette_xy(r24>>12&63,players,dx,dy,m))return;
     Kept&k=kept[seat&1];uint16_t now[128],want[128];for(unsigned i=0;i<m;i++)now[i]=gpu_vram_peek_cpu(dx+(int)i,dy);
@@ -439,24 +468,153 @@ static void unblink_draw(uint32_t pc){
     const uint32_t f=word(obj+0x24);if(!(f&0x800)||memory_get_ram_ptr()[0x0D5D68]<2)return;
     for(unsigned seat=0;seat<2;seat++){const uint32_t rec=seat_record(seat);if(rec&&(obj==rec||obj==word(rec+0x38))){psx_mod_write_word(obj+0x24,f&~0x800u);psx_mod_counter_add("rr.rider.unblinked",1);return;}}
 }
+static void random_page();
 void rrpc::look_tick(){
     if(rrpc::netplay())return;
     load_options();
+    random_page();   // every host frame: the Race Options row follows the page at once
     static uint64_t last;uint64_t now=GetTickCount64();if(now-last<200)return;last=now;
     look_apply();
 }
 void rrpc::look_guest_tick(){load_options();look_apply();}
+static void random_riders_apply(unsigned players);
 static void look_apply(){
     if(!race())return;uint32_t cfg=word(0x8005B2F8);unsigned players=word(cfg+0x30),mode=race_mode();
     if(players<1||players>2||(mode&1))return;
+    if(mode==4&&options.random_riders&&!rrpc::netplay()&&rrpc::showroom_seat()<0)random_riders_apply(players);
     // The showroom (showroom.cpp) is a one-player race: its rider wears the look
     // of the seat whose row is selected, and steps back to Original too.
     const int shown=rrpc::showroom_seat();
     for(unsigned seat=0;seat<players;seat++){uint32_t rec=seat_record(seat);if(!rec)continue;const unsigned o=shown>=0&&seat==0?(unsigned)shown:seat;
         // Jail Break: the stock aliases as the game has them; the YOU rider wears the Rider look.
         if((mode&0x20)&&rrpc::jail_stock_seat(seat))continue;
-        int hue=rr_paint_hue(options.paint[o]);if(hue>=0)paint_bike(rec,players,hue);else if(shown>=0)unpaint_bike(rec);
+        int hue=rr_paint_hue(options.paint[o]),scheme=rr_paint_scheme(options.paint[o]);if(hue>=0)paint_bike(rec,players,hue);else if(scheme>=0)paint_bike_scheme(rec,players,scheme);else if(shown>=0)unpaint_bike(rec);
         dress_rider(rec,players,seat,options.outfit[o],options.colour[o]);}
+}
+// Random riders (owner, 19 Nov; NEXT-TASKS.md 9): an Off / On row on Time Trials >
+// Race Options, under Opponents / Traffic / Cops, kept in [riders] random (off by
+// default). On, every AI rider of a Time Trial gets a random name (the game's own
+// rider names, string ids 34-65, none twice), a random outfit (a Rider look
+// outfit) in random colours (the Rider look's Colours choices, or the outfit's
+// own; Spaz keeps his, in palette slot 28) and a random bike paint (the bike's own or one of the game's six
+// bike palettes), new for each race. AI riders share palette slots, so they are
+// pointed at the game's palettes rather than given copies; the hue paints need a
+// palette of their own and stay the player's. Not in the showroom, not online.
+//  The page (frontend page struct 0x8009912C: +4 the lit record, +8 the record
+//  count, +0x10 the table; stock 0x8008D034, 8 records of 120 bytes: 2/4/6 the
+//  arrowed rows (+20 string 68 / 69 / 70, label y +38), 3/5/7 their values (x
+//  202, y at +18; +24 the menu list's index)) uses a 10-record copy at
+//  0x801FA000 (empty in menus) while it is shown: record 8 a copy of the Cops row
+//  20 lower, record 9 its value. The game's own cursor reaches and lights it;
+//  its text is ours (random_text) and Player 1's Left / Right on it switch the
+//  option (random_pad), so the copied Cops list never changes from it.
+namespace {
+constexpr uint32_t RO_PAGE=0x8009912C,RO_STOCK=0x8008D034,RO_TABLE=0x801FA000,RO_REC=120,RO_TEXT=RO_TABLE+10*RO_REC,RO_END=RO_TEXT+24;
+constexpr unsigned RO_STOCK_RECS=8,RO_RECS=10,RO_ROW=8;
+bool ro_ours;uint8_t ro_written[RO_END-RO_TABLE];
+bool ro_on_page(){return word(0x8009C5C8)==RO_PAGE&&word(RO_PAGE+0x10)==RO_TABLE&&(uint16_t)half(RO_PAGE+8)==RO_RECS;}
+bool ro_stock_ok(){return word(RO_PAGE+0x10)==RO_STOCK&&(uint16_t)half(RO_PAGE+8)==RO_STOCK_RECS&&(uint16_t)half(RO_STOCK+2*RO_REC+20)==68&&(uint16_t)half(RO_STOCK+6*RO_REC+20)==70&&
+    (uint16_t)half(RO_STOCK+6*RO_REC+8)==0x0D&&(uint16_t)half(RO_STOCK+7*RO_REC+8)==0x10&&(uint16_t)half(RO_STOCK+7*RO_REC+18)==70;}
+}
+static void random_page(){
+    if(rrpc::netplay())return;
+    auto*ram=memory_get_ram_ptr();uint8_t*block=ram+(RO_TABLE&0x1fffff);
+    if(word(0x8009C5C8)==RO_PAGE){
+        if(ro_ours||!ro_stock_ok())return;
+        for(unsigned i=0;i<sizeof ro_written;i++)if(block[i]){psx_mod_counter_add("rr.random.no_room",1);return;}   // never over anything else
+        uint8_t*t=ro_written;const uint8_t*s=ram+(RO_STOCK&0x1fffff);std::memset(t,0,sizeof ro_written);std::memcpy(t,s,RO_STOCK_RECS*RO_REC);
+        uint8_t*bar=t+8*RO_REC,*val=t+9*RO_REC;std::memcpy(bar,s+6*RO_REC,RO_REC);std::memcpy(val,s+7*RO_REC,RO_REC);
+        auto add=[](uint8_t*r,unsigned off,int d){int16_t v;std::memcpy(&v,r+off,2);v=(int16_t)(v+d);std::memcpy(r+off,&v,2);};
+        for(unsigned off:{38u,50u,62u,86u})add(bar,off,20);   // label, bar, both arrows
+        std::memcpy(bar+40,"BTNN",4);add(val,18,20);
+        std::memcpy(t+10*RO_REC,"Random riders\0On\0Off",21);
+        for(unsigned i=0;i<sizeof ro_written;i++)psx_mod_write_byte(RO_TABLE+i,t[i]);
+        psx_mod_write_word(RO_PAGE+0x10,RO_TABLE);psx_mod_write_half(RO_PAGE+8,RO_RECS);ro_ours=true;psx_mod_counter_add("rr.random.row_in",1);
+        return;
+    }
+    if(!ro_ours)return;ro_ours=false;
+    // The page left (or another overlay loaded): the stock table back while the
+    // page struct still holds ours, with the rows' lit state; then the block
+    // cleared while it is still what was written (the stock records and text).
+    if(word(RO_PAGE+0x10)==RO_TABLE&&(uint16_t)half(RO_PAGE+8)==RO_RECS){
+        for(unsigned rec=2;rec<8;rec+=2)for(unsigned i=0;i<4;i++)psx_mod_write_byte(RO_STOCK+rec*RO_REC+40+i,block[rec*RO_REC+40+i]);
+        if((uint16_t)half(RO_PAGE+4)==RO_ROW)psx_mod_write_half(RO_PAGE+4,6);
+        psx_mod_write_word(RO_PAGE+0x10,RO_STOCK);psx_mod_write_half(RO_PAGE+8,RO_STOCK_RECS);
+    }
+    if(!std::memcmp(block+10*RO_REC,ro_written+10*RO_REC,sizeof ro_written-10*RO_REC))for(unsigned i=0;i<sizeof ro_written;i++)psx_mod_write_byte(RO_TABLE+i,0);
+}
+void rrpc::random_text(CPUState*c){
+    if(!c||!ro_ours||!ro_on_page())return;
+    // The row's label (x 37) and value (x 202) at y 90 are the copied Cops row's
+    // texts: "Cops" and its "On" / "Off". The page's other menu (Race, Rank,
+    // Bike ...) also draws a row there, so the text itself is checked too.
+    const int x=(int16_t)c->gpr[6],y=(int16_t)c->gpr[7];if(y<84||y>100||!range(c->gpr[5],8))return;
+    const char*s=(const char*)memory_get_ram_ptr()+(c->gpr[5]&0x1fffff);
+    if(x<150&&!std::strcmp(s,"Cops"))c->gpr[5]=RO_TEXT;
+    else if(x>=150&&(!std::strcmp(s,"On")||!std::strcmp(s,"Off")))c->gpr[5]=options.random_riders?RO_TEXT+14:RO_TEXT+17;
+}
+uint16_t rrpc::random_pad(uint16_t buttons){
+    static uint16_t last=0xffff,mask=0;const uint16_t pressed=(uint16_t)(last&~buttons);last=buttons;
+    constexpr uint16_t LEFT=1<<7,RIGHT=1<<5;
+    if(ro_ours&&ro_on_page()&&(uint16_t)half(RO_PAGE+4)==RO_ROW&&(pressed&(LEFT|RIGHT))){
+        auto next=options;next.random_riders=!next.random_riders;if(rrpc::save_rider_options(next))options.random_riders=next.random_riders;
+        mask|=(uint16_t)(pressed&(LEFT|RIGHT));psx_mod_counter_add("rr.random.switched",1);}
+    mask&=(uint16_t)~buttons;   // held from the game until released
+    return (uint16_t)(buttons|mask);
+}
+// The picks, new for each race (the race clock starts again from 0).
+struct RandomPick{uint8_t name,outfit;int8_t scheme,colour;};static RandomPick picks[16];
+static bool random_active(){return options.random_riders&&!rrpc::netplay()&&rrpc::showroom_seat()<0&&race_mode()==4;}
+static void random_riders_apply(unsigned players){
+    const uint32_t base=word(0x8005B3A0),cfg=word(0x8005B2F8);if(!range(base,16*0x448)||!range(cfg,0x40))return;
+    static uint32_t last_clock=~0u;static uint64_t rng;const uint32_t clock=word(cfg+0xC);
+    if(last_clock==~0u||clock<last_clock){
+        rng=(GetTickCount64()+1)*0x9E3779B97F4A7C15ull^base;auto next=[]{rng^=rng<<13;rng^=rng>>7;rng^=rng<<17;return rng;};
+        uint8_t names[32];for(unsigned i=0;i<32;i++)names[i]=(uint8_t)(34+i);
+        for(unsigned i=31;i>0;i--){unsigned j=(unsigned)(next()%(i+1));uint8_t s=names[i];names[i]=names[j];names[j]=s;}
+        static const int8_t schemes[]={-1,0,1,2,3,13,27};const int outfits=rr_look_count(RR_LOOK_OUTFIT);
+        // Colours: the Rider look's Colours choices (the outfit's own rank colours,
+        // the gang and police palettes, schemes 1-15), slot 28 left out: it holds
+        // Spaz's colours in these races.
+        int8_t colours[32];unsigned ncol=0;colours[ncol++]=-1;
+        for(int v=1;v<rr_look_count(RR_LOOK_COLOUR)&&ncol<32;v++){const int s=rr_colour_slot(v);if(s>=0&&s<28)colours[ncol++]=(int8_t)s;}
+        for(unsigned i=0;i<16;i++)picks[i]={names[i],(uint8_t)(1+next()%(unsigned)(outfits-1)),schemes[next()%7],colours[next()%ncol]};
+        psx_mod_counter_add("rr.random.races",1);
+    }
+    last_clock=clock;
+    const unsigned char*spaz_tex=nullptr;const uint16_t*spaz_pal=nullptr;rr_spaz_look(disc_path(),&spaz_tex,&spaz_pal);
+    for(unsigned i=0;i<16;i++){
+        const uint32_t rec=base+i*0x448;const unsigned seat=(uint16_t)half(rec+0xAC);if(seat<players||seat>=16)continue;
+        const RandomPick&p=picks[seat];
+        // Bike: one of the game's bike palettes (the slot the bike draws through).
+        const uint32_t b24=word(rec+0x24);
+        if(p.scheme>=0&&(b24&0x400)&&(b24>>12&63)!=(unsigned)p.scheme)psx_mod_write_word(rec+0x24,(b24&~0x3F000u)|(uint32_t)p.scheme<<12);
+        // Rider: the outfit's body and texture set, in the picked colours (Spaz: his own).
+        const uint32_t rider=word(rec+0x38);if(!range(rider,0x64))continue;const uint32_t r24=word(rider+0x24);if(!(r24&0x400))continue;
+        int model=0,set=0,slot=-1,profile=0;if(!rr_outfit_look(p.outfit,&model,&set,&slot,&profile))continue;
+        if(set==RR_SPAZ_SET){set=spaz_set();slot=28;if(set<0||!spaz_pal)continue;
+            int x,y;unsigned m;if(palette_xy(28,players,x,y,m)){bool same=true;for(unsigned k=0;k<m&&same;k++)same=gpu_vram_peek_cpu(x+(int)k,y)==spaz_pal[k];
+                if(!same){gpu_write_gp0(0xA0000000u);gpu_write_gp0((uint32_t)y<<16|(uint32_t)x);gpu_write_gp0(1u<<16|m);for(unsigned k=0;k<m;k+=2)gpu_write_gp0(spaz_pal[k]|(uint32_t)(k+1<m?spaz_pal[k+1]:0)<<16);}}}
+        else if(p.colour>=0)slot=p.colour;
+        const uint32_t desc=0x800CE1B0u+16u*(unsigned)model;if(!range(desc,16)||(word(desc)&0xFFFF)!=(model==3?0x96u:0x9Fu))continue;
+        bool changed=false;
+        if(word(rider+0x60)!=desc){psx_mod_write_word(rider+0x60,desc);psx_mod_write_byte(rider+8,0xFF);changed=true;}
+        if((uint16_t)half(rider+0x4A)!=(uint16_t)set){psx_mod_write_half(rider+0x4A,(uint16_t)set);changed=true;}
+        if(slot>=0&&slot<64&&(r24>>12&63)!=(unsigned)slot){psx_mod_write_word(rider+0x24,(r24&~0x3F000u)|(uint32_t)slot<<12);changed=true;}
+        if(changed)psx_mod_counter_add("rr.random.dressed",1);
+    }
+}
+// A random rider's name where the race names an AI rider: the opponent's name
+// under the health bars (0x80061EE4, rider index in s0) and the standings rows
+// (0x800C5FDC, rider at the caller's sp+40).
+static bool random_name(CPUState*c,uint32_t origin,uint32_t table){
+    if(!random_active()||!range(table,128*4))return false;
+    const uint32_t cfg=word(0x8005B2F8);const unsigned players=range(cfg,0x34)?word(cfg+0x30):1;unsigned seat=99;
+    if(origin==0x80061EE4)seat=c->gpr[16];
+    else if(origin==0x800C5FDC){const uint32_t rider=word(c->gpr[29]+40);if(range(rider,0x448))seat=(uint16_t)half(rider+0xAC);}
+    if(seat<players||seat>=16)return false;
+    const uint32_t text=word(table+4u*picks[seat].name);if(!range(text,4))return false;
+    c->gpr[5]=text;psx_mod_counter_add("rr.random.name_draws",1);return true;
 }
 // The screen a text draw belongs to, for the in-game editor's Game text page
 // (game_editor.cpp); nullptr in a cop race (Five-O keeps the game's words).
@@ -489,9 +647,11 @@ extern "C" void __wrap_func_8002CDC8(CPUState*c){
     // Time Trial's demo courses: the page's summary names the selected one.
     rrpc::demo_text(c);
     rrpc::jail_text(c);   // Jail Break: the YOU entry's panel and Weapon row
+    rrpc::random_text(c);   // Time Trials > Race Options: the Random riders row
     const uint32_t game_string=c->gpr[5];   // the PC menu may point a1 at its own text
     if(rrpc::rider_menu_font(c))return;
     uint32_t origin=text_origin(c),table=word(c->gpr[28]+0x8b8);bool named=false;
+    if(race_overlay()&&random_name(c,origin,table))named=true;   // Time Trial's random riders
     if(options.names){
         int seat=named_seat(c,origin,table);
         if(seat>=0&&seat<2&&options.name[seat][0]){named=true;

@@ -552,6 +552,20 @@ def extend_main(src):
     src = _sub(src,
         "    g_dynres.active = floor_s < ceiling;\n",
         "    g_dynres.active = floor_s < ceiling && dynres_requested() != 0;   /* RR: only when asked for */\n")
+    # Keys the player can't rebind. The runtime links its debug tools into every build
+    # (the public log says "debug toggles ... (keys 0-9)"), so 0-9, -, = and F10-F12
+    # switched renderer settings mid-game and Ctrl+C re-inserted the disc; a player
+    # who put an action on one of them had both happen. The public release
+    # (RR_PUBLIC_RELEASE) keeps neither; the startup half of the debug toggles (render
+    # surfaces at the display's scale, for in-game supersampling) is unchanged.
+    src = _sub(src,
+        "                debug_toggles_on() && debug_toggle_key((int)key, nullptr, 0))\n",
+        "                RR_DEBUG_KEYS && debug_toggles_on() && debug_toggle_key((int)key, nullptr, 0))\n")
+    src = _sub(src,
+        "            else if (key == SDLK_c && (mod & KMOD_CTRL)) {\n",
+        "            else if (RR_DEBUG_KEYS && key == SDLK_c && (mod & KMOD_CTRL)) {\n")
+    src = ("#ifdef RR_PUBLIC_RELEASE\n#define RR_DEBUG_KEYS 0   /* race_timing.py: no debug keys for players */\n"
+           "#else\n#define RR_DEBUG_KEYS 1\n#endif\n") + src
     return src
 
 if __name__ == '__main__':

@@ -199,9 +199,58 @@ namespace {
 // in the speed panel) is keyed by the picture's box (kx..kh) and drawn in its
 // own sub-box over the CLUT colour bg (-1: none); the rest of the picture keeps
 // the HD UI smoothing (atlas marker, rr_text_sdf_build).
-struct HdGlyph{int px,py,cx,cy,u,v,w,h;char ch;int fill,ring,bg;uint64_t key;};
+// rcx,rcy: the primitive's own CLUT (cx,cy is the atlas's, shared by a page's pixel art).
+struct HdGlyph{int px,py,cx,cy,u,v,w,h;char ch;int fill,ring,bg;uint64_t key;int rcx,rcy;};
 // Shapes drawn in code instead of a font letter (ch below RR_HD_FIRST).
-enum:char{RR_HD_BALL=1,RR_HD_HOOP=2};
+// RR_HD_ART: a multi-colour picture upscaled from its own texels (rr_text_hd_apply).
+// RR_HD_SKULL: the knock-off skull redrawn as vector shapes (hd_skull).
+enum:char{RR_HD_BALL=1,RR_HD_HOOP=2,RR_HD_ART=3,RR_HD_SKULL=4};
+// The knock-off skull and crossbones, redrawn in code after the game's 32 x 32
+// sprite (same outline, shapes and lighting; prototype and side-by-side check:
+// work/claude/skull_proto.py). x,y in texels from the sprite's top-left corner.
+// Returns the CLUT index (-1: none) and sets *outer to the distance to the
+// picture's outer edge (inside positive). Indices of CLUT 992,152 by
+// brightness: 4 3 6 2 0 7 5 8 1 9 11 10 12 (13 is transparent).
+static int hd_skull(float x,float y,float*outer){
+ static const int idx[13]={4,3,6,2,0,7,5,8,1,9,11,10,12};static const int lum[13]={248,216,192,168,144,112,88,72,56,48,32,24,16};
+ auto shade=[](float l){const float t=std::min(1.0f,std::max(0.0f,l))*232+16;int b=0;for(int k=1;k<13;k++)if(std::fabs(lum[k]-t)<std::fabs(lum[b]-t))b=k;return idx[b];};
+ auto ell=[](float x,float y,float cx,float cy,float rx,float ry){return (1-std::hypot((x-cx)/rx,(y-cy)/ry))*std::min(rx,ry);};
+ auto rbox=[](float x,float y,float x0,float y0,float x1,float y1,float r){
+  const float qx=std::max({x0+r-x,x-(x1-r),0.0f}),qy=std::max({y0+r-y,y-(y1-r),0.0f});
+  return qx>0||qy>0?r-std::hypot(qx,qy):std::min(std::min(x-x0,x1-x),std::min(y-y0,y1-y));};
+ const float LINE_W=0.6f;
+ const float ds=std::max({rbox(x,y,5.0f,0.2f,26.0f,13.2f,6.6f),rbox(x,y,6.2f,8.0f,24.8f,15.0f,3.0f),rbox(x,y,10.6f,12.0f,20.6f,19.4f,2.4f)});
+ *outer=ds;
+ if(ds>0){
+  if(ds<LINE_W)return 1;                                                    // outline
+  for(float cx:{11.4f,19.6f}){   // sunken eye sockets: a dark hollow in a shaded ring
+   const float e=ell(x,y,cx,10.1f,2.1f,1.25f);if(e>0)return e>0.55f?12:e>0.25f?10:9;
+   const float r=ell(x,y,cx,9.9f,3.1f,2.2f);if(r>0)return shade(0.30f+0.35f*(1-r/2.2f)-(y>10.0f?0.1f:0.0f));}
+  if(ell(x,y,15.5f,12.5f,0.85f,0.95f)>0)return 10;                      // nose
+  if(y>13.9f&&y<14.7f&&x>11.4f&&x<19.6f)return 9;                        // mouth line
+  if(y>=14.7f&&y<17.6f&&x>13.3f&&x<17.7f){if(std::fabs(x-15.5f)<0.32f||y>17.1f)return 9;return shade(0.74f-(y-14.7f)*0.06f);}   // two teeth
+  if(y>14.7f&&x>11.2f&&x<19.8f)return shade(0.42f-0.04f*std::fabs(x-15.5f));   // inside the jaw
+  const float l=1.12f-0.026f*std::hypot(x-13.2f,(y-4.0f)*1.1f)-0.018f*std::max(0.0f,x-15.5f)
+   -0.32f*std::max(0.0f,1-(ds-LINE_W)/2.4f)-(y>13.0f?0.10f:0.0f);
+  return shade(l);
+ }
+ // The crossed bones behind it, each with a double knob at both ends.
+ static const float bones[2][4]={{2.9f,15.6f,28.9f,28.2f},{28.9f,14.8f,2.9f,28.6f}};
+ float bd=-1e9f,bs=0;
+ for(const auto&b:bones){
+  const float dx=b[2]-b[0],dy=b[3]-b[1],n=std::hypot(dx,dy),ux=dx/n,uy=dy/n,px=-uy,py=ux;
+  const float t=std::min(1.0f,std::max(0.0f,((x-b[0])*dx+(y-b[1])*dy)/(n*n)));
+  float d=2.45f-std::hypot(x-b[0]-t*dx,y-b[1]-t*dy);
+  for(int e=0;e<2;e++){const float s=e?1.0f:-1.0f,ex=(e?b[2]:b[0])+s*ux*0.3f,ey=(e?b[3]:b[1])+s*uy*0.3f;
+   for(float k:{-1.0f,1.0f})d=std::max(d,2.2f-std::hypot(x-ex-k*px*1.55f,y-ey-k*py*1.55f));}
+  float side=(x-b[0])*px+(y-b[1])*py;if(py>0)side=-side;   // positive: the bone's upper side
+  *outer=std::max(*outer,d);
+  if(d>0&&d>bd){bd=d;bs=side;}
+ }
+ if(bd<=0)return -1;
+ if(bd<LINE_W)return 1;
+ return shade(0.78f+0.26f*bs/2.0f-0.20f*std::max(0.0f,1-(bd-LINE_W)/1.0f));
+}
 struct PageKind{int px,py,cx,cy;bool outlined;};
 // Pixel-art CLUTs of one page share one atlas (their glyph boxes do not
 // overlap and their colours come from each primitive's own CLUT): the
@@ -232,9 +281,9 @@ static void hd_add_in(int tp,int clut,int ku,int kv,int kw,int kh,int u,int v,in
  auto at=std::lower_bound(hd_keys.begin(),hd_keys.end(),key);
  if(at!=hd_keys.end()&&*at==key)return;
  hd_keys.insert(at,key);
- const int px=(tp&15)*64,py=((tp>>4)&1)*256;int cx=(clut&63)*16,cy=(clut>>6)&511;
+ const int px=(tp&15)*64,py=((tp>>4)&1)*256,rcx=(clut&63)*16,rcy=(clut>>6)&511;int cx=rcx,cy=rcy;
  if(fill>=0)art_atlas(px,py,cx,cy,&cx,&cy);
- hd_glyphs.push_back({px,py,cx,cy,u,v,w,h,ch,fill,ring,bg,key});
+ hd_glyphs.push_back({px,py,cx,cy,u,v,w,h,ch,fill,ring,bg,key,rcx,rcy});
  hd_pages.fetch_or(1u<<(tp&0x1f));
  hd_count.store((uint32_t)hd_glyphs.size());
  if(std::getenv("RR_FONT_TRACE"))std::fprintf(stderr,"HD glyph '%c' page %d,%d clut %d,%d box %d,%d %dx%d\n",ch,(tp&15)*64,((tp>>4)&1)*256,(clut&63)*16,(clut>>6)&511,u,v,w,h);
@@ -264,6 +313,15 @@ static void seed_hud(){   // hd_mu held
  // (a shaded red ball), 16,52 the empty outline beside it.
  const int nitro=(155<<6)|(960>>4);
  hd_add(tp,nitro,20,52,4,5,RR_HD_BALL,3,7);hd_add(tp,nitro,16,52,4,5,RR_HD_HOOP,7,7);
+ // Pictures from the game's HUD sprite list (RAM 0x800D45D0, 16 bytes each:
+ // id, w, h, then the corners' UV/CLUT/page): the skull shown when you knock a
+ // rider off (id 10, 32 x 32, CLUT 992,152), redrawn in code (RR_HD_SKULL), and
+ // the turn signs (id 2 left, CLUT 992,150; id 3 right, CLUT 1008,150),
+ // upscaled from their own texels. Each is keyed for a sprite (32 wide) and a
+ // quad (UV span 31) too.
+ // 19 Nov: skull redraw pulled (owner disliked it); the game's own skull shows until new art.
+ const struct{int u,v,cx,cy;char kind;}pics[]={{192,80,992,150,RR_HD_ART},{224,80,1008,150,RR_HD_ART}};
+ for(const auto&q:pics)for(int span=32;span>=31;span--)hd_add_in(tp,(q.cy<<6)|(q.cx>>4),q.u,q.v,span,span,q.u,q.v,32,32,q.kind,0,-1,-1);
  // Race start countdown: 3, 2, 1 as 17-18 x 21 sprites on the same page (CLUT
  // 960,151, an anti-aliased level ramp with a dark rim), drawn mid-screen.
  const int count=(151<<6)|(960>>4);
@@ -517,6 +575,41 @@ extern "C" int rr_text_hd_apply(const uint16_t*vram,int px,int py,int cx,int cy,
   // the outline (ring index) 0.7 texel wide. RR_HD_BALL: the fill is shaded
   // like the original (lit from the upper left: highlight index 5, then 3, 2
   // and the darkest 0 towards the lower right); RR_HD_HOOP: outline only.
+  // Pictures: 4x per texel. At each atlas pixel a smooth (cubic B-spline)
+  // weighted vote of the 4 x 4 texels around it picks the colour, so each
+  // colour region's edge becomes a smooth curve instead of texel steps; the
+  // share of opaque texels (CLUT colour not 0, inside the box) gives the outer
+  // edge, anti-aliased by the GPU like lettering.
+  if(g.ch==RR_HD_SKULL){   // vector redraw: colour from hd_skull, outer edge anti-aliased by the GPU
+   const int fx0=g.u*K,fy0=g.v*K,fx1=std::min(FW,(g.u+g.w)*K),fy1=std::min(FW,(g.v+g.h)*K);
+   for(int fy=fy0;fy<fy1;fy++)for(int fx=fx0;fx<fx1;fx++){
+    float outer=0;int idx=hd_skull((fx+0.5f)/K-g.u,(fy+0.5f)/K-g.v,&outer);
+    if(idx<0)idx=1;   // just outside: the outline colour, for the edge's anti-aliasing
+    uint8_t*o=out+((size_t)fy*FW+fx)*4;o[0]=255;o[1]=(uint8_t)(idx|0x40);o[2]=enc(outer);o[3]=(uint8_t)idx;
+   }
+   rect[0]=std::min(rect[0],fx0);rect[1]=std::min(rect[1],fy0);rect[2]=std::max(rect[2],fx1);rect[3]=std::max(rect[3],fy1);drawn++;
+   continue;
+  }
+  if(g.ch==RR_HD_ART){
+   const uint16_t*pal=vram+(size_t)g.rcy*1024+g.rcx;
+   const int fx0=g.u*K,fy0=g.v*K,fx1=std::min(FW,(g.u+g.w)*K),fy1=std::min(FW,(g.v+g.h)*K);
+   auto bs=[](float t){t=std::fabs(t);return t<1.0f?(4.0f-6.0f*t*t+3.0f*t*t*t)/6.0f:t<2.0f?(2.0f-t)*(2.0f-t)*(2.0f-t)/6.0f:0.0f;};
+   for(int fy=fy0;fy<fy1;fy++)for(int fx=fx0;fx<fx1;fx++){
+    const float x=(fx+0.5f)/K-0.5f,y=(fy+0.5f)/K-0.5f;const int bx=(int)std::floor(x),by=(int)std::floor(y);
+    float vote[16]={0},opaque=0,total=0;
+    for(int j=-1;j<=2;j++)for(int i=-1;i<=2;i++){
+     const int tu=bx+i,tv=by+j;const float wgt=bs(x-tu)*bs(y-tv);total+=wgt;
+     if(tu<g.u||tv<g.v||tu>=g.u+g.w||tv>=g.v+g.h)continue;
+     const int k=level(tu,tv);if(!pal[k])continue;
+     vote[k]+=wgt;opaque+=wgt;
+    }
+    int idx=0;for(int k=1;k<16;k++)if(vote[k]>vote[idx])idx=k;
+    const float d=(opaque/std::max(total,1e-6f)-0.5f)*1.5f;   // texels from the opaque edge
+    uint8_t*o=out+((size_t)fy*FW+fx)*4;o[0]=enc(d+1.0f);o[1]=(uint8_t)(idx|0x40);o[2]=enc(d);o[3]=(uint8_t)idx;
+   }
+   rect[0]=std::min(rect[0],fx0);rect[1]=std::min(rect[1],fy0);rect[2]=std::max(rect[2],fx1);rect[3]=std::max(rect[3],fy1);drawn++;
+   continue;
+  }
   if(g.ch==RR_HD_BALL||g.ch==RR_HD_HOOP){
    const float cx0=g.u+0.5f*g.w,cy0=g.v+0.5f*g.h,ax=0.5f*g.w,ay=0.5f*g.h,W=0.7f;
    const int fx0=g.u*K,fy0=g.v*K,fx1=std::min(FW,(g.u+g.w)*K),fy1=std::min(FW,(g.v+g.h)*K);
