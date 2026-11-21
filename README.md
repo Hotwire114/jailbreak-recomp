@@ -2,6 +2,8 @@
   <img src="source/project-logo.png" alt="Jailbreak Recomp logo" width="480">
 </p>
 
+[![Get it on RecompLauncher](https://recomplauncher.com/assets/press/launcher/badge-dark.svg)](https://recomplauncher.com/game/jailbreak-recomp) [![Verified developer on RecompStore](https://recompstore.com/assets/press/verified-dark.svg)](https://recompstore.com/dev/hotwire114)
+
 # Jailbreak Recomp
 
 An unofficial native PC port of **Road Rash: Jailbreak** (PlayStation, 2000, USA version SLUS-01053), built by **static recompilation**. The PlayStation game code is translated into native C ahead of time and compiled for Windows, then run on the open-source [psxrecomp](https://github.com/RetroPortingToolKit/psxrecomp) runtime. It is not an emulator running the game image: the game runs as native code, which is what makes 60 and 120 FPS races, widescreen and the PC features below possible.
