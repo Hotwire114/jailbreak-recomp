@@ -15,6 +15,15 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include "owner_assets.h"
+/* Programs the launcher starts: "name.exe" on Windows, "name" on Linux (linux-gui/: the same
+ * launcher on SDL3, built for the Linux release). */
+#ifdef _WIN32
+#define RR_EXE L".exe"
+#define RR_FOLDER_LINK 1   /* the first screen's "Install to: ... Change" */
+#else
+#define RR_EXE L""
+#define RR_FOLDER_LINK 0   /* Linux: the game folder is ~/.local/share/RoadRashJailbreak (--data-root moves it) */
+#endif
 #ifndef WM_DPICHANGED
 #define WM_DPICHANGED 0x02E0
 #endif
@@ -111,6 +120,11 @@ static void ol_attach(DWORD pid);static void ol_detach(void);   /* online_link_h
 static int game_was_online;static void lb_mmr_apply(void);       /* lobby_page.h: ratings from the online game's races */
 static void join(wchar_t *dest,const wchar_t *base,const wchar_t *name);
 static int load_project_logo(void){
+#ifndef _WIN32
+    /* Linux: no resources; the logo ships beside the launcher (source/project-logo.png). */
+    wchar_t path[32768];join(path,appdir,L"source\\project-logo.png");unsigned lw=0,lh=0;uint32_t*px=rr_linux_load_png(path,&lw,&lh);
+    if(!px)return 0;project_logo.pixels=px;project_logo.w=lw;project_logo.h=lh;return 1;
+#endif
     HRSRC resource=FindResourceW(NULL,MAKEINTRESOURCEW(102),RT_RCDATA);if(!resource)return 0;
     DWORD bytes=SizeofResource(NULL,resource);BYTE*data=LockResource(LoadResource(NULL,resource));if(!data||!bytes)return 0;
     HRESULT init=CoInitializeEx(NULL,COINIT_APARTMENTTHREADED);if(FAILED(init))return 0;
@@ -240,7 +254,7 @@ static void settings(void){
     online_delay=GetPrivateProfileIntW(L"online",L"delay",2,ini);if(online_delay<1||online_delay>8)online_delay=2;
     online_ready=lobby_ready=0;online_fp[0]=0;online_runtime=L"runtime";
     for(int i=0;i<2&&!online_ready;i++){const wchar_t*dir=i?L"runtime":L"runtime-netplay";wchar_t path[32768],exe[32768],fp[80];
-     swprintf(path,32768,L"%ls\\%ls\\RoadRashNativeResearch.netplay.ini",store,dir);swprintf(exe,32768,L"%ls\\%ls\\RoadRashNativeResearch.exe",store,dir);
+     swprintf(path,32768,L"%ls\\%ls\\RoadRashNativeResearch.netplay.ini",store,dir);swprintf(exe,32768,L"%ls\\%ls\\RoadRashNativeResearch" RR_EXE,store,dir);
      GetPrivateProfileStringW(L"build",L"fingerprint",L"",fp,80,path);
      if(wcslen(fp)!=64||GetPrivateProfileIntW(L"build",L"netplay",0,path)!=1||!exists(exe))continue;
      WideCharToMultiByte(CP_UTF8,0,fp,-1,online_fp,65,NULL,NULL);online_runtime=dir;online_ready=1;lobby_ready=1;}
@@ -478,10 +492,18 @@ static int builder_thread;   /* builder is the setup thread (else a process) */
 static int builder_exit(DWORD*code){return builder_thread?GetExitCodeThread(builder,code):GetExitCodeProcess(builder,code);}
 static void toolkit_python(wchar_t*out){wchar_t ws[32768];if(workspace[0])wcscpy(ws,workspace);else{
     /* toolkit id: recipe/toolkit.json "id" */
+#ifdef _WIN32
     char id[64]="rr-toolkit";wchar_t path[32768];join(path,appdir,L"recipe\\toolkit.json");FILE*f=_wfopen(path,L"rb");
+#else
+    char id[64]="rr-toolkit";wchar_t path[32768];join(path,appdir,L"recipe\\toolkit-linux.json");FILE*f=_wfopen(path,L"rb");
+#endif
     if(f){char text[8192]={0};fread(text,1,sizeof text-1,f);fclose(f);char*p=strstr(text,"\"id\"");if(p&&(p=strchr(p+4,'"'))){char*e=strchr(p+1,'"');if(e&&e-p-1<63){memcpy(id,p+1,(size_t)(e-p-1));id[e-p-1]=0;}}}
     wchar_t wid[64];MultiByteToWideChar(CP_UTF8,0,id,-1,wid,64);swprintf(ws,32768,L"%ls\\toolkits\\%ls",store,wid);}
+#ifdef _WIN32
     swprintf(out,32768,L"%ls\\work\\tooling\\toolchain\\python\\python.exe",ws);}
+#else
+    swprintf(out,32768,L"%ls\\work\\tooling\\toolchain\\python\\bin\\python3",ws);}
+#endif
 /* A hidden process with its output in store\<log> (NULL: no log). */
 static int run_logged(wchar_t*cmd,const wchar_t*logname,HANDLE*process){
     STARTUPINFOW si={0};PROCESS_INFORMATION pi={0};si.cb=sizeof si;HANDLE log=INVALID_HANDLE_VALUE;
@@ -540,6 +562,21 @@ static void remove_tree(const wchar_t*dir_in){
 }
 /* First-run bootstrap (the toolchain, when its Python is not there yet), then setup_game.py. */
 static void setup_clear_old_build(void);static void first_start_note(void);static const wchar_t*setup_antivirus_note(void);
+#ifndef _WIN32
+/* Linux: the system's Python 3 runs tools/linux_toolkit.py, which downloads and checks the pinned
+ * Linux build tools (recipe/toolkit-linux.json), then hands over to setup_game.py with the tools'
+ * own Python. Progress comes back the same way (build-status.txt, "progress=" second line). */
+static unsigned __stdcall setup_worker(void*arg){
+    (void)arg;wchar_t path[32768];join(path,store,L"setup.log");FILE*lf=_wfopen(path,L"wb");if(lf)fclose(lf);
+    setup_clear_old_build();   /* Run setup again (launcher_update.h) */
+    const wchar_t*py=exists(L"/usr/bin/python3")?L"/usr/bin/python3":exists(L"/bin/python3")?L"/bin/python3":exists(L"/usr/local/bin/python3")?L"/usr/local/bin/python3":NULL;
+    if(!py){setup_status("SETUP FAILED: Setup needs Python 3 for its first download (most Linux systems and SteamOS have it). Install python3, then choose Run setup again.");return 1;}
+    wchar_t script[32768],cmd[65536];join(script,appdir,L"tools\\linux_toolkit.py");
+    swprintf(cmd,65536,L"\"%ls\" -I \"%ls\" --package \"%ls\" --data-root \"%ls\"",py,script,appdir,store);
+    HANDLE p;if(!run_logged(cmd,L"setup-console.log",&p)){setup_status("SETUP FAILED: Python 3 could not start.");return 1;}
+    WaitForSingleObject(p,INFINITE);DWORD code=1;GetExitCodeProcess(p,&code);CloseHandle(p);return code;
+}
+#else
 static unsigned __stdcall setup_worker(void*arg){
     (void)arg;wchar_t python[32768],path[32768];toolkit_python(python);
     join(path,store,L"setup.log");FILE*lf=_wfopen(path,L"wb");if(lf)fclose(lf);
@@ -572,6 +609,7 @@ static unsigned __stdcall setup_worker(void*arg){
     HANDLE p;if(!run_logged(cmd,NULL,&p)){setup_status("SETUP FAILED: the build tools' Python could not start.");return 1;}
     WaitForSingleObject(p,INFINITE);DWORD code=1;GetExitCodeProcess(p,&code);CloseHandle(p);return code;
 }
+#endif
 static void prepare_original(void){
     wchar_t python[32768],script[32768],cmd[65536],status[32768];toolkit_python(python);join(script,appdir,L"tools\\prepare_original.py");join(status,store,L"launch-status.txt");DeleteFileW(status);
     if(!exists(python)){play_after_mod_check=0;notice(L"Prepare the local game build first (Game installation).");return;}
@@ -611,7 +649,7 @@ static void play_game_now(void){
     if(!installed){notice(L"Import your BIN/CUE or ISO once to install the game.");return;}if(busy)return;
     if(game_process){DWORD code;if(GetExitCodeProcess(game_process,&code)&&code==STILL_ACTIVE){notice(L"Your game is already running. Return to its window.");return;}CloseHandle(game_process);game_process=NULL;}
     if(!validate_disc(discfile)){installed=0;forget_artwork();notice(L"Installed game data is missing or damaged. Import your game again.");return;}
-    wchar_t exe[32768],cwd[32768],config[32768],saves[32768],cmd[65536];join(cwd,store,L"runtime");join(exe,cwd,L"RoadRashNativeResearch.exe");
+    wchar_t exe[32768],cwd[32768],config[32768],saves[32768],cmd[65536];join(cwd,store,L"runtime");join(exe,cwd,L"RoadRashNativeResearch" RR_EXE);
     wchar_t receipt[32768];join(receipt,store,L"local-build.json");
     if(!exists(exe)||!exists(receipt)){build_game();return;}
     /* Rebuild only when the game itself changed: game-build-id.txt beside the launcher
@@ -621,9 +659,12 @@ static void play_game_now(void){
     if(enhanced_mode){FILE*f=_wfopen(receipt,L"rb");char data[4096]={0};if(f){fread(data,1,sizeof(data)-1,f);fclose(f);}
         wchar_t idfile[32768];join(idfile,appdir,L"game-build-id.txt");char id[80]={0};FILE*g=_wfopen(idfile,L"rb");if(g){fread(id,1,64,g);fclose(g);id[64]=0;}
         if(strlen(id)==64?!strstr(data,id):!strstr(data,"rr-pc-1.2")){build_game();return;}}
+#ifndef _WIN32
+    if(enhanced_mode)mod_checked=1;   /* Linux: no mods yet, so no mod check before an Enhanced launch (Original still prepares its runtime) */
+#endif
     if(!mod_checked){play_after_mod_check=1;if(enhanced_mode)run_mod(L"sync",NULL);else prepare_original();online_launch=online&&play_after_mod_check;return;}mod_checked=0;
     online_launch=online;
-    join(cwd,store,online?online_runtime:enhanced_mode?L"runtime":L"runtime-original");join(exe,cwd,L"RoadRashNativeResearch.exe");if(!write_runtime_settings()){online_launch=0;notice(L"Game settings could not be written. Check your installation folder and free disk space.");return;}join(config,store,enhanced_mode?L"game.toml":L"game-original.toml");join(saves,store,L"saves");
+    join(cwd,store,online?online_runtime:enhanced_mode?L"runtime":L"runtime-original");join(exe,cwd,L"RoadRashNativeResearch" RR_EXE);if(!write_runtime_settings()){online_launch=0;notice(L"Game settings could not be written. Check your installation folder and free disk space.");return;}join(config,store,enhanced_mode?L"game.toml":L"game-original.toml");join(saves,store,L"saves");
     /* Online: a debug port per seat, so two instances can share one PC for tests. */
     swprintf(cmd,65536,L"\"%ls\" --game \"%ls\" --debug-port %d --memcard-dir \"%ls\"",exe,config,online_launch?4380+online_slot:4376,saves);
     sb_backup_cards();
@@ -631,7 +672,9 @@ static void play_game_now(void){
     if(started){if(online_launch)ol_detach();else ol_attach(GetProcessId(game_process));game_was_online=online_launch;}   /* Online from the game's menus; ratings after an online game */
     if(started&&quick_start)quick_start=2;
     if(started)notice(online_launch?L"ONLINE GAME RUNNING \u2014 CLOSE ITS WINDOW TO RETURN HERE":enhanced_mode?L"ENHANCED GAME RUNNING \u2014 CLOSE ITS WINDOW TO RETURN HERE":L"ORIGINAL GAME RUNNING \u2014 CLOSE ITS WINDOW TO RETURN HERE");else notice(L"The local game build could not start. See the setup guide.");
+#ifdef _WIN32
     if(started&&!online_launch&&enhanced_mode)first_start_note();   /* antivirus may hold a new build's first start */
+#endif
     online_launch=0;room_slots=0;
 }
 static DWORD CALLBACK copy_progress(LARGE_INTEGER total,LARGE_INTEGER done,LARGE_INTEGER stream,LARGE_INTEGER streamdone,DWORD number,DWORD reason,HANDLE src,HANDLE dst,LPVOID context){(void)stream;(void)streamdone;(void)number;(void)reason;(void)src;(void)dst;(void)context;if(total.QuadPart)InterlockedExchange(&progress,(LONG)(done.QuadPart*100/total.QuadPart));return PROGRESS_CONTINUE;}
@@ -650,10 +693,16 @@ static int resolve_cue(wchar_t *path){
     PathRemoveFileSpecW(path);wcscat(path,L"\\");wcscat(path,name);return 1;
 }
 static int folder_space_check(void);   /* launcher_folder.h */
+static void import_from(wchar_t*chosen);
 static void import_disc(void){
     if(busy)return;wchar_t chosen[32768]={0};OPENFILENAMEW dialog={0};dialog.lStructSize=sizeof(dialog);dialog.hwndOwner=mainwindow;dialog.lpstrFilter=L"Road Rash game disc (*.bin;*.iso;*.cue)\0*.bin;*.iso;*.cue\0";dialog.lpstrFile=chosen;dialog.nMaxFile=32768;dialog.lpstrTitle=L"Import your original Road Rash: Jailbreak (USA)";dialog.Flags=OFN_FILEMUSTEXIST|OFN_PATHMUSTEXIST|OFN_NOCHANGEDIR;
     if(!folder_space_check())return;   /* launcher_folder.h: too little space for a first install */
     if(!GetOpenFileNameW(&dialog))return;
+    import_from(chosen);
+}
+/* The chosen (or, on Linux, dropped) .bin / .cue / .iso: checked and copied by import_worker. */
+static void import_from(wchar_t*chosen){
+    if(busy)return;
     if(!resolve_cue(chosen)){wchar_t err[256];MultiByteToWideChar(CP_UTF8,0,error_text,-1,err,256);MessageBoxW(mainwindow,err,L"Game import",MB_ICONWARNING);return;}
     busy=1;progress=0;notice(L"INSTALLING YOUR GAME DATA \u2014 YOU ONLY NEED TO IMPORT ONCE");
     wchar_t *copy=_wcsdup(chosen);uintptr_t thread=_beginthreadex(NULL,0,import_worker,copy,0,NULL);if(!thread){free(copy);busy=0;notice(L"Could not start the game import.");}else CloseHandle((HANDLE)thread);
@@ -694,6 +743,9 @@ static void go_back(void){
     page=parent;list_first=0;InvalidateRect(mainwindow,NULL,FALSE);
 }
 #include "launcher_motion.h"
+#ifndef _WIN32
+#include "linux_launcher_prompt.h"
+#endif
 #include "launcher_uninstall.h"
 
 typedef struct NamePrompt {HWND edit;wchar_t name[9];int accepted;} NamePrompt;
@@ -704,6 +756,13 @@ static LRESULT CALLBACK name_proc(HWND window,UINT msg,WPARAM wp,LPARAM lp){
     if(msg==WM_CLOSE){DestroyWindow(window);return 0;}return DefWindowProcW(window,msg,wp,lp);
 }
 static void edit_rider_name(int seat){
+#ifndef _WIN32
+    {wchar_t title[48],name[16];swprintf(title,48,L"Player %d rider name",seat+1);wcsncpy(name,rider_names[seat],15);name[15]=0;
+     while(rr_linux_prompt(mainwindow,title,L"Choose a name (up to 8 characters)",name,16,8,0)){
+         if(!rider_name_valid(name)){MessageBoxW(mainwindow,L"Use 1–8 letters, numbers, spaces or ' - _ .",L"Choose your rider name",MB_OK);continue;}
+         wcscpy(rider_names[seat],name);save_settings();notice(L"RIDER NAME SAVED — APPLIES ON YOUR NEXT ENHANCED LAUNCH");break;}
+     return;}
+#endif
     WNDCLASSW wc={0};wc.lpfnWndProc=name_proc;wc.hInstance=GetModuleHandleW(NULL);wc.lpszClassName=L"JailbreakRiderName";wc.hCursor=LoadCursorW(NULL,IDC_ARROW);wc.hbrBackground=(HBRUSH)(COLOR_WINDOW+1);RegisterClassW(&wc);
     NamePrompt state={0};wchar_t title[48];swprintf(title,48,L"Player %d rider name",seat+1);RECT r;GetWindowRect(mainwindow,&r);UINT dpi=window_dpi(mainwindow);
 #define D(v) MulDiv(v,dpi,96)
@@ -1022,6 +1081,10 @@ static LRESULT CALLBACK proc(HWND window,UINT msg,WPARAM wp,LPARAM lp){
     if(msg==WM_APP+3){update_checked((int)wp);return 0;}
     if(msg==WM_APP+2){online_ready_to_play((int)wp,(int)lp);InvalidateRect(window,NULL,FALSE);return 0;}
     if(msg==WM_APP+1){busy=0;if(wp){installed=1;artwork();page=selected=list_first=nav_depth=0;binding=-1;notice(L"GAME DATA INSTALLED \u2014 THE ORIGINAL DISC FILE IS NO LONGER REQUIRED");if(!preset_chosen)open_page(SETUP_PAGE);if(!preview_only)build_game();}else{wchar_t err[256];MultiByteToWideChar(CP_UTF8,0,error_text,-1,err,256);const wchar_t*why=err[0]?err:L"Game import failed. Your previous installation was preserved.";notice(why);MessageBoxW(mainwindow,why,L"Game import",MB_ICONWARNING);}return 0;}
+#ifndef _WIN32
+    /* Linux: a disc image dropped on the window is imported (some desktops have no file picker). */
+    if(msg==WM_DROPFILES){wchar_t*f=rr_linux_take_dropped_file();if(f){if(!busy&&!game_process&&folder_space_check())import_from(f);free(f);}InvalidateRect(window,NULL,FALSE);return 0;}
+#endif
     if(msg==WM_CHAR&&installed&&binding<0&&lb_chat_char(wp)){InvalidateRect(window,NULL,FALSE);return 0;}
     /* Alt and F10 arrive as system keys: bindable like any other. */
     if(msg==WM_SYSKEYDOWN&&installed&&binding>=0){capture_binding(wp,lp);InvalidateRect(window,NULL,FALSE);return 0;}
@@ -1186,13 +1249,17 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE previous,PWSTR line,int show){
     if(online_start_on&&!online_address[0])wcscpy(online_address,L"127.0.0.1");
     mainwindow=CreateWindowExW(0,wc.lpszClassName,APP_TITLE,WS_OVERLAPPEDWINDOW,CW_USEDEFAULT,CW_USEDEFAULT,1280,760,NULL,NULL,instance,NULL);if(!mainwindow){LocalFree(argv);return 13;}
     /* Start-up: Straight to game, once set up (game imported, preset chosen, game built). */
-    {wchar_t built[32768];join(built,store,L"runtime\\RoadRashNativeResearch.exe");
+    {wchar_t built[32768];join(built,store,L"runtime\\RoadRashNativeResearch" RR_EXE);
      if((start_game_directly||cli_play)&&installed&&preset_chosen&&exists(built)&&!show_launcher&&!(GetAsyncKeyState(VK_SHIFT)&0x8000)&&!play_on_start&&!setup_on_start&&!online_start_on&&!room_test&&page==0)quick_start=1;}
     /* --play before the game is built: the launcher opens and builds it, then plays. */
     if(cli_play&&!quick_start&&installed&&preset_chosen&&!show_launcher&&!(GetAsyncKeyState(VK_SHIFT)&0x8000))play_on_start=1;
     place_main_window();SetTimer(mainwindow,1,500,NULL);SetTimer(mainwindow,2,50,NULL);SetTimer(mainwindow,4,6500,NULL);if(!quick_start){ShowWindow(mainwindow,show);UpdateWindow(mainwindow);}
     if(quick_start)play_game();
+#ifdef _WIN32
     {uintptr_t t=_beginthreadex(NULL,0,update_cleanup_worker,NULL,0,NULL);if(t)CloseHandle((HANDLE)t);}if(!cli_no_update)update_check_daily();   /* launcher_update.h */
+#else
+    (void)cli_no_update;   /* Linux: no self-update (a new release is a new download) */
+#endif
     if(installed&&!preset_chosen&&!play_on_start&&page==0)open_page(SETUP_PAGE);   /* first run: choose a preset */
     if(setup_on_start&&installed)build_game();
     if(find_game&&!installed)import_disc();
@@ -1202,3 +1269,8 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE previous,PWSTR line,int show){
         if(room_test==1){lb_size=room_test_n>=2&&room_test_n<=8?room_test_n:2;lb_test_autostart=lb_size;lb_host();}else{lb_test_autoready=1;lb_join(room_test_code);}}
     MSG msg;while(GetMessageW(&msg,NULL,0,0)>0){TranslateMessage(&msg);DispatchMessageW(&msg);}LocalFree(argv);if(builder)CloseHandle(builder);if(game_process)CloseHandle(game_process);return 0;
 }
+
+#ifndef _WIN32
+/* Linux: the same launcher, started like a Windows program (linux-gui/). */
+int main(void){return wWinMain(NULL,NULL,NULL,SW_SHOWDEFAULT);}
+#endif

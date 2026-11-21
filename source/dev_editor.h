@@ -44,6 +44,9 @@ static LRESULT CALLBACK text_proc(HWND window,UINT msg,WPARAM wp,LPARAM lp){
 }
 /* Edits `text` (cap characters, \n line breaks). Returns 1 on OK. */
 static int prompt_text(const wchar_t*title,const wchar_t*caption,wchar_t*text,size_t cap,int multiline){
+#ifndef _WIN32
+    return rr_linux_prompt(mainwindow,title,caption,text,cap,(int)cap-1,multiline);   /* Linux: the launcher's own text box */
+#endif
     WNDCLASSW wc={0};wc.lpfnWndProc=text_proc;wc.hInstance=GetModuleHandleW(NULL);wc.lpszClassName=L"JailbreakTextPrompt";wc.hCursor=LoadCursorW(NULL,IDC_ARROW);wc.hbrBackground=(HBRUSH)(COLOR_WINDOW+1);RegisterClassW(&wc);
     TextPrompt state={0};state.multiline=multiline;state.cap=cap;
     wchar_t*buffer=calloc(cap+cap/2+8,sizeof(wchar_t));if(!buffer)return 0;

@@ -10,6 +10,8 @@ GraphicsOptions& graphics_options();
 // Model detail steps ([display] model_detail): LOD switch distance in percent
 // of the original game's. Shared with the launcher (launcher_skin.h).
 int model_detail_percent(int step);
+// Watched PCs of the object draw (pc_services.cpp, teleported riders); a0/a1 its arguments.
+void draw_observe(uint32_t pc,uint32_t a0,uint32_t a1);
 // Start-up movie skip: pad 1's buttons with Start + Cross taps while an intro
 // movie streams (until the main menu first appears). Called by the pad hook.
 uint16_t intro_skip_filter(uint16_t buttons);

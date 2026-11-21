@@ -26,6 +26,8 @@ store=setup_report.plain_path(args.data_root.resolve()) or args.data_root.resolv
 workspace=setup_report.plain_path(args.workspace.resolve()) or args.workspace.resolve()
 PYTHON=str(setup_report.plain_path(sys.executable) or sys.executable)
 package=pathlib.Path(__file__).resolve().parent.parent
+# Program names: Windows tools and games end in .exe, Linux ones have no suffix.
+X='.exe' if os.name=='nt' else ''
 store.mkdir(parents=True,exist_ok=True)
 log=(store/'build.log').open('w',encoding='utf-8',buffering=1)
 def say(message):log.write(message+'\n');print(message,flush=True)
@@ -56,11 +58,19 @@ def build_jobs():
     """Parallel compile and link jobs: one per CPU thread (one left for the PC), with 0.75 GB of
     available memory each (eight jobs measured about 4 GB in all), never fewer than two. The
     game is the same either way."""
-    import ctypes
-    class Memory(ctypes.Structure):
-        _fields_=[('length',ctypes.c_ulong),('load',ctypes.c_ulong)]+[(n,ctypes.c_ulonglong) for n in ('total','available','page_total','page_available','virtual_total','virtual_available','extended')]
-    m=Memory();m.length=ctypes.sizeof(m)
-    memory_jobs=int(m.available/(0.75*2**30)) if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m)) else 2
+    if os.name=='nt':
+        import ctypes
+        class Memory(ctypes.Structure):
+            _fields_=[('length',ctypes.c_ulong),('load',ctypes.c_ulong)]+[(n,ctypes.c_ulonglong) for n in ('total','available','page_total','page_available','virtual_total','virtual_available','extended')]
+        m=Memory();m.length=ctypes.sizeof(m)
+        memory_jobs=int(m.available/(0.75*2**30)) if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m)) else 2
+    else:
+        # Linux: MemAvailable from /proc/meminfo (kB).
+        memory_jobs=2
+        try:
+            for line in open('/proc/meminfo',encoding='ascii'):
+                if line.startswith('MemAvailable:'):memory_jobs=int(int(line.split()[1])*1024/(0.75*2**30));break
+        except (OSError,ValueError):pass
     return max(2,min((os.cpu_count() or 2)-1,memory_jobs))
 JOBS=int(os.environ.get('RR_BUILD_JOBS') or build_jobs())
 # The offline and online games build at the same time, each with half the jobs: a few huge
@@ -70,7 +80,7 @@ EACH=max(1,(JOBS+1)//2)
 def build_target(toolbin,build,env,jobs,out=None):
     """Ninja resumes where it stopped, so a step that failed for an outside reason (antivirus
     holding a tool for a moment: "cmake.exe is not recognized") gets one more try."""
-    command=[toolbin/'cmake.exe','--build',build,'--target','rr-game','-j',jobs]
+    command=[toolbin/('cmake'+X),'--build',build,'--target','rr-game','-j',jobs]
     try:run(command,env=env,out=out)
     except RuntimeError:say('Build stopped; trying once more');time.sleep(5);run(command,env=env,out=out)
 class Progress(threading.Thread):
@@ -109,7 +119,7 @@ class Progress(threading.Thread):
             if thread is not None and not thread.is_alive():continue   # the online build ended (or was skipped)
             done=self.finished(build,offset);count+=1
             for name,ms in ref.items():
-                if name==self.exe:continue
+                if name==self.exe or name+".exe"==self.exe:continue   # the link (Linux: no .exe)
                 work+=ms;longest=max(longest,ms)
                 if name in done:done_ref+=ms;done_real+=max(done[name],1)
                 else:compiling=True
@@ -157,7 +167,7 @@ def pe_dependencies(file):
     return names
 def stage_runtime(build,compiler,framework,folder='runtime',out=None):
     runtime=store/folder;runtime.mkdir(exist_ok=True)
-    exe=required(build/'RoadRashNativeResearch.exe');shutil.copy2(exe,runtime/exe.name)
+    exe=required(build/('RoadRashNativeResearch'+X));shutil.copy2(exe,runtime/exe.name)
     manifest=required(build/'RoadRashNativeResearch.execution.json')
     run([sys.executable,framework/'tools/release_stage.py','stage-execution','--binary',runtime/exe.name,'--manifest',manifest],out=out)
     for folder in ['bios','mods/bundled']:
@@ -241,13 +251,17 @@ default_enabled=true
     temp=store/'build-temp';temp.mkdir(exist_ok=True)
     env['TMPDIR']=str(temp);env['TEMP']=str(temp);env['TMP']=str(temp)
     status('Preparing native race overlays from your installed files')
-    run([sys.executable,framework/'tools/aot_overlay_pipeline.py','static','--profile',profile_path,'--game-toml',game,'--recompiler',recompiler,'--work-dir',stage/'aot-build','--gcc',toolbin/'clang.exe','--workers','2','--out-dir',stage/'overlays','--cmake',toolbin/'cmake.exe'],env=env)
+    run([sys.executable,framework/'tools/aot_overlay_pipeline.py','static','--profile',profile_path,'--game-toml',game,'--recompiler',recompiler,'--work-dir',stage/'aot-build','--gcc',toolbin/('clang'+X),'--workers','2','--out-dir',stage/'overlays','--cmake',toolbin/('cmake'+X)],env=env)
     status('Preparing native boot routines and strict execution checks')
     run([sys.executable,package/'tools/prepare_kernel_native.py','--framework',framework,'--recompiler',recompiler,'--bios',bios,'--game-exe',exe,'--output',stage/'kernel-native'],env=env)
     run([sys.executable,package/'tools/prepare_native_guard.py','--framework',framework,'--output',stage/'guard'],env=env)
     source=store/'runtime-project';source.mkdir(exist_ok=True)
     shutil.copy2(package/'source/runtime-CMakeLists.txt',source/'CMakeLists.txt')
     for name in ['native_guard.c','native_kernel.c','rider_enhancements.cpp','rider_enhancements.h','rider_menu.cpp','pc_services.cpp','pc_services.h','discord_presence.cpp','discord_presence.h','custom_music.cpp','custom_music.h','native_ui.cpp','native_ui.h','taunt_voices.cpp','taunt_voices.h','mod_assets.cpp','mod_assets.h','quick_resume.cpp','quick_resume.h','menu_titles.cpp','controls_screen.cpp','controls_screen.h','netplay_session.cpp','netplay_session.h','game_editor.cpp','game_editor.h','hud_editor.cpp','gameplay_editor.cpp','demo_courses.cpp','demo_courses.h','jailbreak_you.cpp','jailbreak_you.h','editor_page.h','course_names.h','owner_assets.c','owner_assets.h','rider_model.h','showroom.cpp','showroom.h','rider_takeover.cpp','mouse_menus.cpp','mouse_menus.h','online_screen.cpp','online_screen.h','online_link.h','menu_canvas.h','disc_reader.h','mdec_image.h','mpeg_tables.h','hd_font_data.h','model_detail.h','achievements.h','gfx_options.h','cheat_codes.h','cheats_runtime.h','game_icon.h']:shutil.copy2(package/'source'/name,source/name)
+    # Linux builds: the small Windows-call layer (runtime-CMakeLists.txt uses it only off Windows).
+    if os.name!='nt':
+     (source/'linux-compat').mkdir(exist_ok=True)
+     for name in ['windows.h','rr_win32_linux.c','bcrypt.h','commdlg.h','mmsystem.h','process.h','shellapi.h','shlobj.h','shlwapi.h']:shutil.copy2(package/'source/linux-compat'/name,source/'linux-compat'/name)
     shutil.copy2(package/'tools/music_mixer.py',source/'music_mixer.py')
     shutil.copy2(package/'tools/spu_events.py',source/'spu_events.py')
     shutil.copy2(package/'tools/gpu_presentation.py',source/'gpu_presentation.py')
@@ -287,7 +301,13 @@ default_enabled=true
     # that has the Vulkan SDK installed tried to build the Vulkan shaders, which needs a Python on
     # PATH, and setup stopped at "Vulkan shader embedding requires Python 3" (GitHub issue 4);
     # every other PC got the inert stub this asks for. PSX_PYTHON: ours, for any other build tool.
-    configure=[toolbin/'cmake.exe','--fresh','-S',source,'-G','Ninja','-DCMAKE_BUILD_TYPE=Release','-DCMAKE_C_COMPILER='+str(toolbin/'clang.exe'),'-DCMAKE_CXX_COMPILER='+str(toolbin/'clang++.exe'),'-DPSXRECOMP_ROOT='+str(framework),'-DRR_PRIVATE_ROOT='+str(private),'-DPSX_DEPS_OFFLINE=ON','-DPython3_EXECUTABLE='+PYTHON,'-DPSX_PYTHON='+PYTHON,'-DPSX_ENABLE_VULKAN=OFF','-DRR_THINLTO='+lto,'-DRR_LINK_JOBS='+str(jobs),*pgo_args]
+    configure=[toolbin/('cmake'+X),'--fresh','-S',source,'-G','Ninja','-DCMAKE_BUILD_TYPE=Release','-DCMAKE_C_COMPILER='+str(toolbin/('clang'+X)),'-DCMAKE_CXX_COMPILER='+str(toolbin/('clang++'+X)),'-DPSXRECOMP_ROOT='+str(framework),'-DRR_PRIVATE_ROOT='+str(private),'-DPSX_DEPS_OFFLINE=ON','-DPython3_EXECUTABLE='+PYTHON,'-DPSX_PYTHON='+PYTHON,'-DPSX_ENABLE_VULKAN=OFF','-DRR_THINLTO='+lto,'-DRR_LINK_JOBS='+str(jobs),*pgo_args]
+    if os.name!='nt':
+        # Linux: the kit's clang compiles against its own sysroot (clang.cfg), but CMake's FindOpenGL
+        # searches the system, where most PCs have no libGL.so/GL headers (dev packages): point it at
+        # the sysroot's, or the game links without OpenGL. Linked as libGL.so.1, found at run time.
+        sysroot=toolbin.parent/'sysroot'
+        configure+=['-DOpenGL_GL_PREFERENCE=LEGACY','-DOPENGL_gl_LIBRARY='+str(sysroot/'usr/lib/x86_64-linux-gnu/libGL.so'),'-DOPENGL_INCLUDE_DIR='+str(sysroot/'usr/include')]
     online=threading.Thread(target=build_online,args=(configure,toolbin,framework,env))
     try:progress=Progress([(build,'offline',None)]+([(store/'runtime-netplay-build','online',online)] if args.netplay_libs else []),2*EACH if args.netplay_libs else JOBS,label)
     except (OSError,ValueError,KeyError):progress=None   # no reference times: the launcher's moving bar
@@ -343,10 +363,10 @@ try:
     shutil.copy2(package/'recipe/seeds.txt',inputs/'seeds.txt')
     stride=disc.sector_size;disc.close()
     cue=store/'installed-disc.cue';cue.write_text('FILE "game-disc.bin" BINARY\n  TRACK 01 '+('MODE2/2352' if stride==2352 else 'MODE1/2048')+'\n    INDEX 01 00:00:00\n')
-    toolbin=required(workspace/'work/tooling/toolchain/bin');baseline=workspace/'work/build-stage2';baseline_exe=baseline/'RoadRashNativeResearch.exe'
+    toolbin=required(workspace/'work/tooling/toolchain/bin');baseline=workspace/'work/build-stage2';baseline_exe=baseline/('RoadRashNativeResearch'+X)
     # Older developer caches lack the presentation adapter. Build it from the
     # user's installed files rather than silently adopting an older backend.
-    framework=required(workspace/'work/upstream/psxrecomp');recompiler=required(workspace/'work/build-framework/psxrecomp-game.exe');bios=required(baseline/'bios/openbios.bin')
+    framework=required(workspace/'work/upstream/psxrecomp');recompiler=required(workspace/('work/build-framework/psxrecomp-game'+X));bios=required(baseline/'bios/openbios.bin')
     runtime,origin=compile_local(exe,cue,image_hash,toolbin,framework,recompiler,bios)
     receipt={'schema':1,'created':time.strftime('%Y-%m-%d %H:%M:%S'),'game_executable_sha256':EXE_HASH,'installed_disc_sha256':image_hash,'runtime_sha256':digest(runtime),'framework_revision':FRAMEWORK_REVISION,'origin':origin,'original_disc_required_again':False,'distributed_game_data_or_backend':False,'presentation_adapter':'rr-pc-1.2','game_build_id':GAME_BUILD_ID,'timing':'fast','precision_instrumentation':False,'pc_services_source_sha256':digest(package/'source/pc_services.cpp'),'discord_source_sha256':digest(package/'source/discord_presence.cpp'),'presentation_source_sha256':digest(package/'source/rider_enhancements.cpp'),'in_game_menu_source_sha256':digest(package/'source/rider_menu.cpp')}
     receipt['custom_music_source_sha256']=digest(package/'source/custom_music.cpp')

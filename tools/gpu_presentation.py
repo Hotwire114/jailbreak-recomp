@@ -1386,6 +1386,7 @@ def _cstr(name, glsl):
 RR_POST_FX = r'''
 /* ---- Road Rash post effects (gpu_presentation.py post_effects) ---- */
 extern int rr_ui_in_race(void);
+extern int rr_showroom_hud_off(void);   /* showroom.cpp: Rider look / photo mode, no HUD on screen */
 static int s_rr_fx[4], s_rr_fx_on;   /* bloom, sharpen, colour, vignette: 0 off, 1 light, 2 strong */
 void gl_renderer_rr_post_set(int bloom, int sharpen, int colour, int vignette) {
     GL_RT_SYNC("rr_post");
@@ -1530,7 +1531,9 @@ static void rr_post_apply(int path, int dx, int dy, int w, int h, int lx, int ly
     } else glBindTexture(GL_TEXTURE_2D, s_rr_fx_src);
     p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, 0);
     glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, lx, ly, lw, lh);
-    const int use_mask = s_rr_uim_tiles > 0;
+    /* With the HUD hidden (Rider look, photo mode) its packets are moved off screen and
+     * mark nothing, so the last marks would stay as faint clock-shaped patches. */
+    const int use_mask = s_rr_uim_tiles > 0 && !rr_showroom_hud_off();
     p_glActiveTexture(PSXGL_TEXTURE0 + 2);
     if (!s_rr_fx_mask) rr_fx_texture(&s_rr_fx_mask, VRAM_W, VRAM_H, 0x8229 /* GL_R8 */, 0x1903 /* GL_RED */, s_rr_uim);
     else glBindTexture(GL_TEXTURE_2D, s_rr_fx_mask);

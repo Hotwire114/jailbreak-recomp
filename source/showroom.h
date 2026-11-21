@@ -17,4 +17,7 @@ int showroom_overlay(int ww,int wh,const uint32_t**pixels,int*w,int*h,int*x,int*
 // opened again on User settings with Rider look selected.
 void rider_menu_leave();
 bool rider_menu_open_look();
+bool race_pause_menu();
+bool photo_start();                    // Pause options > Photo mode: false when not possible here
+bool photo_active();                   // photo mode: the paused race through a free camera, no HUD
 }

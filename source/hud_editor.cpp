@@ -84,6 +84,8 @@ void log(FILE* f, const char* stamp) {
 void commit() {std::lock_guard<std::mutex> lock(hmu); for (int i = 0; i < N; i++) saved[i] = draft[i]; serial_++;}
 void discard() {std::lock_guard<std::mutex> lock(hmu); for (int i = 0; i < N; i++) draft[i] = saved[i]; publish_locked();}
 
+#ifdef _WIN32
+// Linux: no editor window yet (the page's file side above still loads and applies game-edits.ini).
 // ---- Page window ----------------------------------------------------------------
 enum {ID_HINT = 300, ID_LIST, ID_LEFT, ID_RIGHT, ID_UP, ID_DOWN, ID_SMALLER, ID_BIGGER, ID_BIG_STEPS,
       ID_RESET_ONE, ID_RESET_ALL, ID_VALUE, ID_LBL_MOVE, ID_LBL_SIZE};
@@ -170,6 +172,9 @@ HWND create(HWND parent, HFONT font) {
         wc.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512)); wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1); RegisterClassW(&wc); reg = true;}
     return CreateWindowExW(WS_EX_CONTROLPARENT, L"JailbreakEditorRaceHud", L"", WS_CHILD, 0, 0, 10, 10, parent, nullptr, GetModuleHandleW(nullptr), nullptr);
 }
+#else
+HWND create(HWND, HFONT) {return nullptr;}
+#endif
 const Page page_def = {L"Race HUD", "[race hud]", create, load_line, loaded, unsaved, serial, write, log, commit, discard};
 }
 

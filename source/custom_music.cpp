@@ -22,17 +22,17 @@ fs::path directory,settings;std::vector<fs::path> tracks;
 std::mutex pending_mutex;std::vector<fs::path> pending;
 bool initialized,custom,race_active,paused_active,preview;int selected;
 uint8_t*pcm;int pcm_bytes,position;SDL_AudioStream*stream;char status[32];
-void save(){WritePrivateProfileStringW(L"music",L"source",custom?L"custom":L"original",settings.c_str());WritePrivateProfileStringW(L"music",L"track",tracks.empty()?L"":tracks[selected].filename().c_str(),settings.c_str());}
+void save(){WritePrivateProfileStringW(L"music",L"source",custom?L"custom":L"original",settings.wstring().c_str());WritePrivateProfileStringW(L"music",L"track",tracks.empty()?L"":tracks[selected].filename().wstring().c_str(),settings.wstring().c_str());}
 void stop(){if(stream){SDL_DestroyAudioStream(stream);stream=nullptr;}SDL_free(pcm);pcm=nullptr;pcm_bytes=position=0;}
 void scan(){
     std::error_code ec;auto previous=tracks.empty()?fs::path{}:tracks[selected].filename();tracks.clear();
     fs::create_directories(directory,ec);
     for(fs::directory_iterator it(directory,ec),end;it!=end&&!ec;it.increment(ec)){
-        auto p=it->path();if(!it->is_regular_file(ec)||it->is_symlink(ec)||_wcsicmp(p.extension().c_str(),L".wav"))continue;
+        auto p=it->path();if(!it->is_regular_file(ec)||it->is_symlink(ec)||_wcsicmp(p.extension().wstring().c_str(),L".wav"))continue;
         auto bytes=it->file_size(ec);if(!ec&&bytes>44&&bytes<=64*1024*1024)tracks.push_back(p);
         if(tracks.size()==128)break;
     }
-    std::sort(tracks.begin(),tracks.end(),[](auto&a,auto&b){return _wcsicmp(a.filename().c_str(),b.filename().c_str())<0;});
+    std::sort(tracks.begin(),tracks.end(),[](auto&a,auto&b){return _wcsicmp(a.filename().wstring().c_str(),b.filename().wstring().c_str())<0;});
     selected=0;for(size_t i=0;i<tracks.size();i++)if(tracks[i].filename()==previous)selected=(int)i;
 }
 bool load_track(){
@@ -49,9 +49,12 @@ bool load_track(){
 }
 void init(){
     if(initialized)return;initialized=true;wchar_t exe[32768];if(!GetModuleFileNameW(nullptr,exe,32768))return;
+#ifndef _WIN32
+    for(wchar_t*c=exe;*c;c++)if(*c==L'\\')*c=L'/';   // linux-compat hands back Windows-style separators
+#endif
     auto root=fs::path(exe).parent_path().parent_path();directory=root/L"music";settings=root/L"launcher.ini";scan();
-    wchar_t source[16],name[260];GetPrivateProfileStringW(L"music",L"source",L"original",source,16,settings.c_str());custom=!std::wcscmp(source,L"custom");
-    GetPrivateProfileStringW(L"music",L"track",L"",name,260,settings.c_str());for(size_t i=0;i<tracks.size();i++)if(tracks[i].filename()==name)selected=(int)i;
+    wchar_t source[16],name[260];GetPrivateProfileStringW(L"music",L"source",L"original",source,16,settings.wstring().c_str());custom=!std::wcscmp(source,L"custom");
+    GetPrivateProfileStringW(L"music",L"track",L"",name,260,settings.wstring().c_str());for(size_t i=0;i<tracks.size();i++)if(tracks[i].filename()==name)selected=(int)i;
     if(custom&&!load_track())custom=false;
 }
 void SDLCALL chosen(void*,const char*const*files,int){
@@ -141,7 +144,7 @@ void music_tick(bool race,bool paused){
     if(race&&stream){SDL_DestroyAudioStream(stream);stream=nullptr;}
     std::vector<fs::path> imports;{std::lock_guard<std::mutex>guard(pending_mutex);imports.swap(pending);}
     if(!imports.empty()){
-        unsigned added=0;for(auto&p:imports){std::error_code ec;auto n=fs::file_size(p,ec);if(ec||n>64*1024*1024||_wcsicmp(p.extension().c_str(),L".wav"))continue;
+        unsigned added=0;for(auto&p:imports){std::error_code ec;auto n=fs::file_size(p,ec);if(ec||n>64*1024*1024||_wcsicmp(p.extension().wstring().c_str(),L".wav"))continue;
             // Validate before copying. A failed/duplicate import preserves files.
             auto utf8=p.u8string();SDL_AudioSpec spec{};uint8_t*data=nullptr;uint32_t length=0;
             if(!SDL_LoadWAV(utf8.c_str(),&spec,&data,&length))continue;SDL_free(data);

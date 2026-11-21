@@ -19,8 +19,15 @@
 #include "memcard.h"
 #include "game_icon.h"
 #include "netplay_session.h"
+#include "showroom.h"
 #include <SDL3/SDL.h>
 #include <windows.h>
+// A char string in a wide format: "%hs" on Windows; glibc takes "%s" (ISO C).
+#ifdef _WIN32
+#define RR_WFMT_CHARS L"%hs"
+#else
+#define RR_WFMT_CHARS L"%s"
+#endif
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -90,7 +97,7 @@ void load(){
     auto step=[](const wchar_t*key,int steps){int v=GetPrivateProfileIntW(L"display",key,0,settings);return v>=0&&v<steps?v:0;};
     options.texture_correction=rr_tc_load(step(L"texture_correction",rr_tc_steps));if(options.texture_correction>=tc_steps)options.texture_correction=0;   // Precise vertices: 0 Off, 2 On (Full); the old On (1) reads as Off
     options.aa=step(L"antialiasing",rr_aa_steps);options.scanlines=step(L"scanlines",rr_scanline_steps);options.draw=step(L"draw_distance",rr_draw_steps);
-    for(int e=0;e<rr_post_effects;e++){wchar_t key[16];std::swprintf(key,16,L"%hs",rr_post_key(e));options.post[e]=step(key,rr_post_steps);}
+    for(int e=0;e<rr_post_effects;e++){wchar_t key[16];std::swprintf(key,16,RR_WFMT_CHARS,rr_post_key(e));options.post[e]=step(key,rr_post_steps);}
     options.shadow=step(L"shadow",rr_shadow_steps);
     // Online: the host's settings that change game state (netplay_session.cpp);
     // texture correction (GTE geometry correction) off on both PCs.
@@ -109,6 +116,10 @@ void load(){
 SDL_Window*window(){int count=0;auto**windows=SDL_GetWindows(&count);auto*w=count==1?windows[0]:nullptr;SDL_free(windows);return w;}
 // The project icon on the game window (title bar, taskbar, Alt+Tab) instead of
 // the default one: big and small images from game_icon.h, sized for the DPI.
+#ifndef _WIN32
+// Linux: the desktop entry gives the icon (SDL needs a decoded image; game_icon.h holds PNG data).
+void set_window_icon(SDL_Window*){}
+#else
 void set_window_icon(SDL_Window*w){
     HWND h=w?(HWND)SDL_GetPointerProperty(SDL_GetWindowProperties(w),SDL_PROP_WINDOW_WIN32_HWND_POINTER,nullptr):nullptr;if(!h)return;
     // The smallest image at least `want` pixels wide, else the largest.
@@ -120,6 +131,7 @@ void set_window_icon(SDL_Window*w){
     if(big)SendMessageW(h,WM_SETICON,ICON_BIG,(LPARAM)big);if(small)SendMessageW(h,WM_SETICON,ICON_SMALL,(LPARAM)small);
     if(big||small)psx_mod_counter_add("rr.window.icon",1);
 }
+#endif
 bool apply_aspect(int aspect){const int nums[]={4,16,21},dens[]={3,9,9};psx_ws_set_native_wide(0);gpu_ws_set_nw_hud_corners(0);gpu_ws_set_full_2d(1);gpu_ws_set_nw_backdrop(0);if(!psx_debug_display_aspect(nums[aspect],dens[aspect],0))return false;if(auto*w=window()){int width,height;SDL_GetWindowSize(w,&width,&height);if(!options.fullscreen)SDL_SetWindowSize(w,width,width*dens[aspect]/nums[aspect]);}return true;}
 // Nothing unlocks while a cheat is on (cheats_runtime.h) or a Gameplay value of
 // the F2 editor is not 100% (gameplay_editor.cpp).
@@ -390,6 +402,50 @@ void hide_frozen(){
         }
     }
 }
+// Teleported riders (owner, 19 Nov: knocked-off riders still popped up in front
+// at 2x and 3x). The game puts a rider who fell far behind back on the road ahead
+// of the player, rider and bike together: out of sight at the stock cull, but
+// it can land well inside a larger draw distance (one landed 18,504 ahead).
+// A bike whose position (+0x0C x, +0x14 z) jumps more than kTeleport between two
+// game frames, and the rider on it (+0x38), are drawn as the original game drew
+// them: not past the stock cull, until they come that close or leave the view
+// (past this draw distance), so they come into sight the way any rider does.
+// Offline only (the draw-time writes stay out of a shared online game). Bikes only:
+// a rider's own position changes meaning as it falls off and gets back on.
+// The draw skips an object the way the showroom hides the other riders
+// (showroom.cpp): +0x34 0 and +0xB0 -1 for that call only, put back at the
+// draw's return block 0x80068438 or the next draw.
+constexpr int32_t kTeleport=4000;
+struct Leap{uint32_t frame=0;int32_t x=0,z=0;bool held=false;};
+Leap leaps[kRaceRiders];
+uint32_t leap_hidden,leap_words[2];
+void leap_unhide(){if(!leap_hidden)return;uint8_t*r=memory_get_ram_ptr();std::memcpy(r+((leap_hidden+0x34)&0x1fffff),&leap_words[0],4);std::memcpy(r+((leap_hidden+0xB0)&0x1fffff),&leap_words[1],4);leap_hidden=0;}
+void leap_draw(uint32_t object,uint32_t view){
+    leap_unhide();
+    if(view>1||draw_percent()<=100||!ram_ptr(object)||rrpc::showroom_seat()>=0||rrpc::netplay())return;   // not online: draw-time RAM writes stay off the shared game
+    const int type=object_type(object);if(type!=1&&type!=2)return;
+    const uint32_t actors=ram_word(kActors),cfg=ram_word(0x8005B2F8);if(!ram_ptr(actors)||!ram_ptr(actors+kActorStride*kRaceRiders)||!ram_ptr(cfg))return;
+    const uint32_t players=ram_word(cfg+0x30);if(players<1||players>2)return;
+    int i=-1;   // the bike: the object itself, or the one carrying this rider
+    for(int k=0;k<kRaceRiders&&i<0;k++){const uint32_t a=actors+kActorStride*k;if(a==object||(type==1&&ram_word(a+0x38)==object))i=k;}
+    if(i<0)return;const uint32_t bike=actors+kActorStride*i;
+    uint16_t seat;std::memcpy(&seat,memory_get_ram_ptr()+((bike+0xAC)&0x1fffff),2);if(seat<players)return;   // the players' own
+    Leap&l=leaps[i];
+    // Measured at the frame's first draw of the bike or its rider, whichever comes first.
+    {const uint32_t frame=ram_word(kFrameCounter);const int32_t x=(int32_t)ram_word(bike+0x0C),z=(int32_t)ram_word(bike+0x14);
+        if(frame!=l.frame){
+            const int64_t dx=(int64_t)x-l.x,dz=(int64_t)z-l.z;
+            if(l.frame&&frame-l.frame<=2&&dx*dx+dz*dz>(int64_t)kTeleport*kTeleport){l.held=true;psx_mod_counter_add("rr.draw.leap_held",1);}
+            l.frame=frame;l.x=x;l.z=z;}}
+    if(!l.held)return;
+    // Released once it is inside the stock cull in a view, or past this draw distance in all.
+    const int32_t near_cull=cull_stock[type],far_cull=(int32_t)ram_word(cull_table+4*type);
+    const int32_t d0=(int32_t)ram_word(bike+0x2C),d1=players>1?(int32_t)ram_word(bike+0x30):far_cull;
+    if(d0<near_cull||(players>1&&d1<near_cull)||(d0>=far_cull&&d1>=far_cull)){l.held=false;return;}
+    if((int32_t)ram_word(object+0x2C+4*view)<near_cull)return;
+    uint8_t*r=memory_get_ram_ptr();leap_hidden=object;std::memcpy(&leap_words[0],r+((object+0x34)&0x1fffff),4);std::memcpy(&leap_words[1],r+((object+0xB0)&0x1fffff),4);
+    const uint32_t zero=0,none=0xffffffffu;std::memcpy(r+((object+0x34)&0x1fffff),&zero,4);std::memcpy(r+((object+0xB0)&0x1fffff),&none,4);
+}
 void apply_draw(){
     static int last=-1;static int32_t target[cull_words];int p=draw_percent();if(p!=last){cull_scaled(p,target);last=p;}
     auto*r=memory_get_ram_ptr()+(cull_table&0x1fffff);int32_t now[cull_words];std::memcpy(now,r,sizeof now);
@@ -402,6 +458,12 @@ void apply_draw(){
 }
 namespace rrpc {
 int model_detail_percent(int step){return rr_detail_percent[step>=0&&step<rr_detail_steps?step:0];}
+// The object draw 0x80067AC4 (a0 object, a1 view) and its return block (rider_enhancements.cpp observer).
+void draw_observe(uint32_t pc,uint32_t a0,uint32_t a1){
+    if(pc!=0x80067AC4u&&pc!=0x80068438u)return;
+    if(pc==0x80068438u||ram_word(0x80067AC4)!=0x27BDFF88u||ram_word(0x80068438)!=0x8FBF0074u){leap_unhide();return;}
+    leap_draw(a0,a1);
+}
 GraphicsOptions& graphics_options(){load();return options;}
 bool change_graphics(int item,int dir){
     load();auto cycle=[dir](int v,int n){return (v+(dir<0?n-1:1))%n;};
@@ -418,7 +480,7 @@ bool change_graphics(int item,int dir){
     }else if(item==7){int next=cycle(options.scanlines,rr_scanline_steps);if(!write_int(L"display",L"scanlines",next,settings))return false;apply_scanlines(next);options.scanlines=next;
     }else if(item==8){int next=cycle(options.draw,rr_draw_steps);if(!write_int(L"display",L"draw_distance",next,settings))return false;options.draw=next;   // apply_draw, next VBlank
     }else if(item==13){int next=cycle(options.shadow,rr_shadow_steps);if(!write_int(L"display",L"shadow",next,settings))return false;options.shadow=next;apply_post();
-    }else if(item>=9&&item<9+rr_post_effects){const int e=item-9;int next=cycle(options.post[e],rr_post_steps);wchar_t key[16];std::swprintf(key,16,L"%hs",rr_post_key(e));
+    }else if(item>=9&&item<9+rr_post_effects){const int e=item-9;int next=cycle(options.post[e],rr_post_steps);wchar_t key[16];std::swprintf(key,16,RR_WFMT_CHARS,rr_post_key(e));
         if(!write_int(L"display",key,next,settings))return false;options.post[e]=next;apply_post();
     }else if(item==1){int next=cycle(options.filter,rr_filter_steps);if(!write_int(L"display",L"filter",next,settings))return false;options.filter=next;apply_filter(next);
     }else if(item==2){auto*w=window();if(!w||!SDL_SetWindowFullscreen(w,!options.fullscreen))return false;

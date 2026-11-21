@@ -281,7 +281,7 @@ void accept(){if(!editing){
     // Quick resume closes the PC menu first: the game's own pause-menu text is
     // back in RAM (and on screen) before the snapshot is taken.
     else if(page_kind==2&&pause_sub){if(row==2){pause_sub=0;row=1;message[0]=0;}else{const char*why=row?rrpc::quick_load(quick_slot):rrpc::quick_save(quick_slot);if(why)std::snprintf(message,32,"%s",why);else close();}}
-    else if(page_kind==2){if(row==0){auto next=rrpc::rider_options();next.large=!next.large;persist(next);}else if(row==1){pause_sub=1;row=0;message[0]=0;}else close();}
+    else if(page_kind==2){if(row==0){auto next=rrpc::rider_options();next.large=!next.large;persist(next);}else if(row==1){pause_sub=1;row=0;message[0]=0;}else{close();rrpc::photo_start();}}
     else if(page_kind==1){if(row==0){auto next=rrpc::rider_options();next.names=!next.names;persist(next);}else if(row<3)begin_edit();}
     else if(page_kind==6){if(row==2)rrpc::music_import();else rrpc::music_change(row,1);}
     return;}
@@ -368,7 +368,7 @@ void page(){
         std::strcpy(labels[0],"QUICK RESUME");std::snprintf(labels[1],32,"Save  < %d >",quick_slot+1);std::snprintf(labels[2],32,"Load  < %d >",quick_slot+1);std::strcpy(description[3],"Back");
         if(message[0])std::snprintf(description[2],32,"%s",message);else rrpc::quick_label(quick_slot,description[2],32);
     }else if(page_kind==2){
-        std::strcpy(labels[0],"PAUSE OPTIONS");std::snprintf(labels[1],32,"Labels: %s",rrpc::rider_options().large?"Large":"Original");std::strcpy(labels[2],"Quick resume");std::strcpy(description[3],"Back");
+        std::strcpy(labels[0],"PAUSE OPTIONS");std::snprintf(labels[1],32,"Labels: %s",rrpc::rider_options().large?"Large":"Original");std::strcpy(labels[2],"Quick resume");std::strcpy(description[3],"Photo mode");   // Back: Triangle
     }else if(page_kind==5){
         const int n=rrpc::achievement_count();
         for(int i=0;i<8;i++){int k=ach_top+i;if(k<n)std::snprintf(labels[i],32,"%s %s",rrpc::achievement_unlocked(k)?"+":"-",rrpc::achievement_name(k));else if(k==n)std::strcpy(labels[i],"Reset all");}
@@ -419,6 +419,7 @@ void page(){
 }
 namespace rrpc {
 bool rider_menu_drawing(){return open&&page_kind==2&&paused();}
+bool race_pause_menu(){return paused()&&!open;}   // the game's own pause menu, the PC page closed (photo mode, showroom.cpp)
 // The showroom: the game's own root menu tables back before it presses
 // through them, and User settings again (Rider look lit) when it is done.
 void rider_menu_leave(){close();main_hold=true;main_drop();release_guard=false;}

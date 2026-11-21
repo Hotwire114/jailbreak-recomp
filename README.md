@@ -37,6 +37,8 @@ Requirements: Windows 10 or 11 (64-bit), about 10 GB of disk space, and an inter
 
 **Coming from 1.0 or 1.1?** Unzip 1.2 to a new folder and run it. The first **Play** rebuilds your game with the 1.2 changes (the tools are already there, so it's quicker), and your saves and settings stay. From 1.2 on, the launcher updates itself: **Game installation → Check for updates** (it also checks once a day).
 
+**On Linux or Steam Deck?** There's a native Linux version (preview) from 1.2.6: get **JailbreakRecomp_x.y_Linux.tar.gz** from the same page, extract it and run `RoadRashJailbreak`. Same launcher and same steps; `README-LINUX.md` inside has the details, including Steam Deck.
+
 Some antivirus programs (Norton, for example) hold a newly built, unsigned exe on its first launch, so the game looks frozen. The launcher warns you when that can happen. Wait, or close it and press Play again, or add an exclusion for that folder.
 
 ## What's new compared with the PlayStation version
@@ -202,7 +204,7 @@ To uninstall, delete that folder and the folder you unzipped. Copy `saves` somew
 
 **Do I need a PlayStation BIOS?** No. The game runs on OpenBIOS, the free open-source replacement.
 
-**Does it work on Linux or Steam Deck?** It's built for Windows and hasn't been tested under Wine or Proton yet.
+**Does it work on Linux or Steam Deck?** Yes, natively from 1.2.6 (a preview): download the `_Linux.tar.gz` release and see `README-LINUX.md`. Online play and mods aren't in the Linux version yet; for those, the Windows version runs under Proton.
 
 **Can I play online?** Yes, from 1.1: **Online** on the game's main menu. Everyone needs the same release.
 
@@ -213,6 +215,7 @@ To uninstall, delete that folder and the folder you unzipped. Copy `saves` somew
 This repository is the release source: the launcher, the PC adapters that extend the runtime, the build recipes and the installer.
 
 - **Launcher:** `Build-Launcher.ps1 -CompilerRoot <path to an LLVM-MinGW bin folder>` builds `RoadRashJailbreak.exe` (C11, clang).
+- **Linux:** the same `launcher.c` builds for Linux against `source/linux-gui` (the Windows calls it uses, on SDL3) and `source/linux-compat` (files, paths, INI, timers), with the pinned Linux toolkit in `recipe/toolkit-linux.json`. The game's PC code uses `linux-compat` too, so the Linux setup builds the same game from the same sources.
 - **The game:** built by the launcher on the player's PC from their own disc. The launcher downloads and checks the pinned toolchain in `recipe/toolkit.json` and unpacks it itself (no PowerShell). The toolchain's own Python then runs `tools/setup_game.py`, which fetches the pinned psxrecomp framework revision, builds the recompiler, and runs `tools/install_game.py`. That generates the native code from the disc, applies the recipes in `tools/` and compiles with `source/runtime-CMakeLists.txt`.
 - **The online game:** a second build of the same sources (`-DRR_NETPLAY=ON`, eight seats, `source/rider_takeover.cpp`) into `runtime-netplay`, with recomp-net and rbengine downloaded at the commits pinned in `recipe/netplay.json`. Its fingerprint is a hash of the release's sources and the game, so players on the same release match and nobody else does.
 - **Speed profile:** `recipe/game.profdata` is an LLVM profile (profile-guided optimisation) recorded from test races in the release build layout: Jail Break, Five-O, Time Trial, Skull-to-Skull, Side Car and the menus. It holds function names, relative source paths and run counts only, with no game code, data or personal paths, and the compiler uses it to lay out the hot code. To record your own, build with `RR_BUILD_PGO=gen`, play, and merge the `.profraw` files with `llvm-profdata merge`.

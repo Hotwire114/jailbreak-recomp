@@ -21,6 +21,12 @@ import argparse, hashlib, json, os, pathlib, re, shutil, subprocess, sys, time, 
 
 HERE = pathlib.Path(__file__).resolve().parent
 PACKAGE = HERE.parent
+# Linux: its own toolchain pin (recipe/toolkit.json is the Windows one and never changes in an
+# update) and program names without .exe.
+WINDOWS = os.name == 'nt'
+X = '.exe' if WINDOWS else ''
+PIN_FILE = 'recipe/toolkit.json' if WINDOWS else 'recipe/toolkit-linux.json'
+TOOL_PYTHON = 'work/tooling/toolchain/python/python.exe' if WINDOWS else 'work/tooling/toolchain/python/bin/python3'
 ap = argparse.ArgumentParser()
 ap.add_argument('--data-root', required=True); ap.add_argument('--workspace'); ap.add_argument('--archive-cache')
 ap.add_argument('--offline', action='store_true'); ap.add_argument('--tools-only', action='store_true'); ap.add_argument('--force-compile', action='store_true')
@@ -73,6 +79,18 @@ def plain_reason(error):
         return 'A download failed. Check your internet connection, then choose Run setup again.'
     return (f'Setup stopped during "{STEP[0]}". Choose Run setup again; if it fails again, choose Report a '
             'problem (the log now says exactly what went wrong).')
+
+# The Linux launcher has no Report a problem or Repair rows: point at the log and GitHub instead.
+LINUX_WORDS = (('choose Report a problem so the log can be checked', 'report it on GitHub with setup.log (Open the setup log)'),
+               ('choose Report a problem (the log now says exactly what went wrong)',
+                'report it on GitHub with setup.log and build.log (Open the game folder)'),
+               ('Choose Repair / re-import game', 'Choose Change game (.bin)'))
+if not WINDOWS:
+    _windows_reason = plain_reason
+    def plain_reason(error):
+        text = _windows_reason(error)
+        for old, new in LINUX_WORDS: text = text.replace(old, new)
+        return text
 
 def sha256(path):
     h = hashlib.sha256()
@@ -168,7 +186,7 @@ try:
     if not args.tools_only and not (DATA / 'game-disc.bin').is_file(): raise RuntimeError('Import your original game in the launcher first.')
     free = shutil.disk_usage(DATA).free / 2**30
     if free < NEED_GB: raise RuntimeError(f'Not enough space left on the drive ({free:.1f} GB free, about {NEED_GB} GB needed)')
-    manifest = PACKAGE / 'recipe/toolkit.json'; pins = json.loads(manifest.read_text(encoding='utf-8')); pin_hash = sha256(manifest)
+    manifest = PACKAGE / PIN_FILE; pins = json.loads(manifest.read_text(encoding='utf-8')); pin_hash = sha256(manifest)
     if args.workspace:
         ws = setup_report.plain_path(pathlib.Path(args.workspace).resolve()); status('Using the selected local development toolkit')
         if ws is None: raise RuntimeError(setup_report.NON_ASCII)
@@ -203,21 +221,22 @@ try:
             env = dict(os.environ); env['PATH'] = str(tools) + os.pathsep + env.get('PATH', '')
             temp = ws / 'temp'; temp.mkdir(parents=True, exist_ok=True); env['TMP'] = env['TEMP'] = env['TMPDIR'] = str(temp)
             status('Building the generic recompiler (two jobs)')
-            run_tool([tools / 'cmake.exe', '-S', framework / 'recompiler', '-B', build, '-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Release',
-                      f'-DCMAKE_C_COMPILER={tools.as_posix()}/clang.exe', f'-DCMAKE_CXX_COMPILER={tools.as_posix()}/clang++.exe',
+            run_tool([tools / ('cmake' + X), '-S', framework / 'recompiler', '-B', build, '-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Release',
+                      f'-DCMAKE_C_COMPILER={tools.as_posix()}/clang{X}', f'-DCMAKE_CXX_COMPILER={tools.as_posix()}/clang++{X}',
                       '-DPSXRECOMP_ENABLE_CHD=OFF', '-DBUILD_TESTING=OFF'], env)
-            run_tool([tools / 'cmake.exe', '--build', build, '--target', 'psxrecomp-game', '-j', '2'], env)
+            run_tool([tools / ('cmake' + X), '--build', build, '--target', 'psxrecomp-game', '-j', '2'], env)
             bios = ws / 'work/build-stage2/bios'; bios.mkdir(parents=True, exist_ok=True)
             shutil.copy2(framework / 'bios/openbios.bin', bios); shutil.copy2(framework / 'bios/OpenBIOS.LICENSE', bios)
-            names = ['work/tooling/toolchain/bin/clang.exe', 'work/tooling/toolchain/bin/cmake.exe', 'work/tooling/toolchain/bin/ninja.exe',
-                     'work/tooling/toolchain/python/python.exe', 'work/build-framework/psxrecomp-game.exe', 'work/build-stage2/bios/openbios.bin',
+            names = ['work/tooling/toolchain/bin/clang' + X, 'work/tooling/toolchain/bin/cmake' + X, 'work/tooling/toolchain/bin/ninja' + X,
+                     TOOL_PYTHON, 'work/build-framework/psxrecomp-game' + X, 'work/build-stage2/bios/openbios.bin',
                      'work/upstream/psxrecomp/third_party/' + pins['webp']['installed_file']]
             receipt = {'schema': 1, 'manifest_sha256': pin_hash, 'framework_revision': pins['framework_revision'], 'game_code_in_toolkit': False,
                        'files': [{'path': n, 'sha256': sha256(ws / n)} for n in names]}
             receipt_path.write_text(json.dumps(receipt, indent=2), encoding='utf-8')
             status('Build tools ready - retained for future offline rebuilds')
     if args.tools_only: sys.exit(0)
-    libs = netplay_libs()
+    # Linux (first native builds): the offline game only; online play there is not tested yet.
+    libs = netplay_libs() if WINDOWS else None
     status('Compiling your native game from installed game data')
     command = [setup_report.plain_path(sys.executable) or sys.executable, HERE / 'install_game.py', '--data-root', BUILD, '--workspace', ws]
     if args.force_compile: command.append('--force-compile')

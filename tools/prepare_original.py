@@ -13,7 +13,7 @@ def original(store):
     try:
         receipt = json.loads((store/'local-build.json').read_text())
         source = private_path(store, store/'runtime')
-        binary = private_path(store, source/'RoadRashNativeResearch.exe')
+        binary = private_path(store, source/('RoadRashNativeResearch.exe' if os.name == 'nt' else 'RoadRashNativeResearch'))
         require(binary.is_file() and file_hash(binary)==receipt['runtime_sha256'],
                 'The local game build differs from its receipt; rebuild it first')
         sidecar = binary.with_suffix('.execution.json')

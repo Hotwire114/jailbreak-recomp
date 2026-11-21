@@ -260,8 +260,12 @@ void demo_text(CPUState* c) {
     const uint32_t a1 = c->gpr[5], now = word(VBL);
     const int sel = selected_demo();
     if (alias_name && a1 == alias_name) {
-        page_seen = now;
         // The page's summary line names the race id (White Knuckle for a demo entry).
+        // Not a sign of the Time Trial page: the results draw that name too, and
+        // taking it as the page swapped White Knuckle's own table back before the
+        // record-name keyboard wrote the new time (owner, 19 Nov: demo times in
+        // White Knuckle's records; demo-records.bin never changed). The page is
+        // the Course row's widget below (the cursor is put back on the demo course).
         if (sel >= 0 && string_addr[sel][0]) c->gpr[5] = string_addr[sel][0];
         return;
     }

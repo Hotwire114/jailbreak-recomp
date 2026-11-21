@@ -1028,7 +1028,17 @@ void rr_gw_drain(void);
 '''
 GW_TAIL = r'''
 /* ---- RR graphics worker (RoadRashJailbreak/tools/gpu_geometry.py) ---- */
+#ifdef _WIN32
 extern __declspec(dllimport) void __stdcall Sleep(unsigned long);
+#define RR_GW_SLEEP() Sleep(1)
+#define RR_GW_CALL __stdcall
+#else   /* Linux: POSIX sleep and threads */
+#include <pthread.h>
+#include <time.h>
+static void rr_gw_sleep1(void) { struct timespec ts = {0, 1000000}; nanosleep(&ts, NULL); }
+#define RR_GW_SLEEP() rr_gw_sleep1()
+#define RR_GW_CALL
+#endif
 extern int g_rr_pgxp_full;
 extern void gl_renderer_worker_release(void);   /* gpu_presentation.py */
 extern int rt_held(void);                         /* render_thread.c */
@@ -1049,7 +1059,7 @@ static void rr_gw_exec(const RrGwOp *op) {
     default: gpu_ws_end_linked_list(); break;
     }
 }
-static unsigned __stdcall rr_gw_main(void *unused) {
+static unsigned RR_GW_CALL rr_gw_main(void *unused) {
     (void)unused;
     rr_gw_self = 1;
     uint32_t idle = 0;
@@ -1057,7 +1067,7 @@ static unsigned __stdcall rr_gw_main(void *unused) {
         const uint32_t h = atomic_load_explicit(&rr_gw_head, memory_order_acquire);
         uint32_t t = atomic_load_explicit(&rr_gw_tail, memory_order_relaxed);
         if (h == t) {   /* spin between race frames; sleep once races stop */
-            if (++idle < 1500000u) __builtin_ia32_pause(); else Sleep(1);
+            if (++idle < 1500000u) __builtin_ia32_pause(); else RR_GW_SLEEP();
             continue;
         }
         idle = 0;
@@ -1073,6 +1083,10 @@ static unsigned __stdcall rr_gw_main(void *unused) {
     }
     return 0;
 }
+#ifndef _WIN32
+static void *rr_gw_thread(void *unused) { rr_gw_main(unused); return NULL; }
+static int rr_gw_start(void) { pthread_t th; if (pthread_create(&th, NULL, rr_gw_thread, NULL)) return 0; pthread_detach(th); return 1; }
+#endif
 /* Whether this walk goes to the worker. */
 int rr_gw_begin(void) {
 #ifdef PSX_HAS_RECOMP_NET
@@ -1087,7 +1101,11 @@ int rr_gw_begin(void) {
         off = !(e && e[0] == '1');
         if (!off) {
             rr_gw_q = (RrGwOp *)malloc(sizeof(RrGwOp) * RR_GW_CAP);
+            #ifdef _WIN32
             off = !rr_gw_q || !_beginthreadex(NULL, 0, rr_gw_main, NULL, 0, NULL);
+#else
+            off = !rr_gw_q || !rr_gw_start();
+#endif
         }
     }
     /* The emulation thread holds the GL context (an upload, an ineligible frame: rt_acquire

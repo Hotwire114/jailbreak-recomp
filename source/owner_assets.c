@@ -64,19 +64,31 @@ const unsigned char*rr_owner_taunts(const wchar_t*path,unsigned*size){
  Disc d={0};Entry root,e;unsigned char*b=NULL;char hash[65];int valid=0;
  if(open_disc(path,&d,&root)&&find_file(&d,root,"/SLUS_010.53",&e)){b=read_entry(&d,e);valid=b&&sha256(b,e.size,hash)&&!strcmp(hash,"52a3e28b2f97e49d8122eb4f510041e64dce046fd8fa9d4cdc49f9e64ff66a7b");}free(b);
  if(valid&&find_file(&d,root,"/DATA/AUDTAUNT.STR",&e)&&e.size<=4*1024*1024){bytes=read_entry(&d,e);if(bytes)length=e.size;}
- /* The captains' own lines are not in AUDTAUNT.STR: the game streams them during
-  * races from the course stream DATA/STREAM1.STR (ids without bit 15, e.g.
-  * 0x0711: kind 0x11 = Cp Helmut, its second variant Lt Tasha; 0x10 = Cp Draco
-  * with Lt Bull). Their 15 distinct 16 KB blocks, at fixed offsets on the
-  * validated disc, are appended with bit 15 set on the id (set 0x81..) like the
-  * catalogue's own; a block whose id or kinds do not match is skipped. */
- static const unsigned captains[]={78348288,9682944,58769408,13058048,55492608,23052288,   /* 0x10: sets 1 3 9 10 12 14 */
-  78413824,83623936,24313856,44400640,12910592,94715904,13090816,63160320,107167744};       /* 0x11: sets 1 3 5 7 8 9 10 14 17 */
- if(bytes&&find_file(&d,root,"/DATA/STREAM1.STR",&e)){unsigned char*grown=realloc(bytes,length+sizeof captains/sizeof*captains*0x4000u);if(grown){bytes=grown;
-  for(unsigned i=0;i<sizeof captains/sizeof*captains;i++){unsigned char*b=bytes+length;unsigned ok=captains[i]%2048==0&&captains[i]+0x4000u<=e.size;
-   for(unsigned s=0;ok&&s<8;s++)ok=sector(&d,e.lba+captains[i]/2048+s,b+s*2048);
-   uint32_t id=ok?le32(b):0,kind=id&255,set=id>>8&255;if(!ok||(id&0xffff0000u)!=0xa0000000u||set<1||set>27||(kind!=0x10&&kind!=0x11)||le32(b+0x20)!=kind)continue;
-   b[1]=(unsigned char)(0x80+set);length+=0x4000;}}}
+ /* More lines than AUDTAUNT.STR holds are streamed by the game during races from
+  * the course stream DATA/STREAM1.STR (block ids without bit 15): the captains'
+  * own lines (kind 0x10 Cp Draco with Lt Bull as its second voice, 0x11 Cp
+  * Helmut with Lt Tasha; every set 1-20) and six more gang blocks (kind 4:
+  * DeSades gang, Kaffe boys) and four more Player 1 rider blocks (kind 6), whose
+  * lines are in no AUDTAUNT block (owner listened, 19 Nov). Those 50 blocks, at
+  * fixed offsets on the validated disc, are appended with bit 15 set on the
+  * set (0x80 + set) like the catalogue's own; the gang and rider blocks get sets
+  * 22+ (AUDTAUNT has 1-21 of those kinds; taunt_voices.cpp keeps one block per set). A block whose id or kind does not
+  * match is skipped. The game's own streaming is untouched: these only widen
+  * the lines a chosen taunt voice can say (taunt_voices.cpp). */
+ static const struct{unsigned offset;unsigned short id;unsigned char set;}streamed[]={
+  {6815744,0x0404,22},{11272192,0x0c04,23},{18464768,0x0f04,24},{23019520,0x1304,25},{704512,0x1904,26},{3260416,0x1c04,27},
+  {5865472,0x0206,22},{26574848,0x0806,23},{24363008,0x0e06,24},{114688,0x1406,25},
+  {3784704,0x0110,1},{6029312,0x0210,2},{6406144,0x0310,3},{6881280,0x0410,4},{13533184,0x0510,5},{13942784,0x0610,6},{26624000,0x0710,7},
+  {13172736,0x0810,8},{11304960,0x0910,9},{13058048,0x0a10,10},{18513920,0x0b10,11},{29179904,0x0c10,12},{29638656,0x0d10,13},{23052288,0x0e10,14},
+  {32047104,0x0f10,15},{32555008,0x1010,16},{245760,0x1110,17},{819200,0x1210,18},{2818048,0x1310,19},{3325952,0x1410,20},
+  {3833856,0x0111,1},{6062080,0x0211,2},{6438912,0x0311,3},{4046848,0x0411,4},{13615104,0x0511,5},{14008320,0x0611,6},{26673152,0x0711,7},
+  {12910592,0x0811,8},{11354112,0x0911,9},{13090816,0x0a11,10},{18579456,0x0b11,11},{29278208,0x0c11,12},{29671424,0x0d11,13},{31621120,0x0e11,14},
+  {32112640,0x0f11,15},{32620544,0x1011,16},{311296,0x1111,17},{901120,0x1211,18},{2867200,0x1311,19},{3375104,0x1411,20}};
+ if(bytes&&find_file(&d,root,"/DATA/STREAM1.STR",&e)){const unsigned n=sizeof streamed/sizeof*streamed;unsigned char*grown=realloc(bytes,length+n*0x4000u);if(grown){bytes=grown;
+  for(unsigned i=0;i<n;i++){unsigned char*b=bytes+length;unsigned ok=streamed[i].offset%2048==0&&streamed[i].offset+0x4000u<=e.size;
+   for(unsigned s=0;ok&&s<8;s++)ok=sector(&d,e.lba+streamed[i].offset/2048+s,b+s*2048);
+   uint32_t id=ok?le32(b):0,kind=id&255;if(!ok||id!=(0xa0000000u|streamed[i].id)||le32(b+0x20)!=kind)continue;
+   b[1]=(unsigned char)(0x80+streamed[i].set);length+=0x4000;}}}
  if(d.fp)fclose(d.fp);if(size)*size=length;return bytes;
 }
 /* The race soundtrack album, /DATA/ALBUM.ALB on the owner's disc (63.5 MB,
@@ -107,14 +119,17 @@ unsigned rr_owner_album_read(const wchar_t*path,unsigned offset,unsigned char*ou
  * 4 + (profile & 3), the gang voice). Every rider is listed by name; the first
  * ten keep their old index. */
 static const struct {const char*name;unsigned char kind,variant;} voices[]={{"Original",0,0},
- {"Lt Tasha",0x21,0},{"Lt Bull",0x20,0},{"Gr Jork",0x21,1},{"Gr Mongo",0x20,1},{"Gator's gang",4,0},{"Aldente's gang",4,1},{"Cop",7,2},{"Player 1 rider",6,2},{"Player 2 rider",0x16,0},
+ {"Lt Tasha",0x21,0},{"Lt Bull",0x20,0},{"Gr Jork",0x21,1},{"Gr Mongo",0x20,1},{"DeSades gang",4,0},{"Kaffe boys",4,1},{"Cop",7,2},{"Player 1 rider",6,2},{"Player 2 rider",0x16,0},
  {"Cp Draco",0x10,0},{"Cp Helmut",0x11,0},{"Gator",4,0},{"Aldente",4,1},{"Zed",4,0},{"Sergio",4,1},{"Tiny",4,0},{"Huang",4,1},{"Scar",4,0},{"Scooter",4,1},{"Kahura",4,1}};
 int rr_voice_canonical(int v){int n=(int)(sizeof voices/sizeof*voices);if(v<=0||v>=n)return 0;for(int i=1;i<v;i++)if(voices[i].kind==voices[v].kind&&voices[i].variant==voices[v].variant)return i;return v;}
-const char*rr_voice_name(int v){return v>0&&v<(int)(sizeof voices/sizeof*voices)?voices[v].name:voices[0].name;}
+/* A rider name that only shares a gang voice (Gator, Aldente, ...) shows and plays as
+ * that voice; the selector steps over them (owner, 19 Nov: same voice twice). */
+const char*rr_voice_name(int v){v=rr_voice_canonical(v);return v>0&&v<(int)(sizeof voices/sizeof*voices)?voices[v].name:voices[0].name;}
 /* variant 2: both variants of the block are the same character. */
 int rr_voice_role(int v,int seat,unsigned*kind,unsigned*variant){if(v<=0||v>=(int)(sizeof voices/sizeof*voices)||voices[v].kind==(seat?0x16u:6u))return 0;if(kind)*kind=voices[v].kind;if(variant)*variant=voices[v].variant;return 1;}
 int rr_voice_next_role(const unsigned char*b,unsigned size,int current,int seat,int step){int n=(int)(sizeof voices/sizeof*voices);if(!b)return 0;
- for(int i=0;i<n;i++){current=((current+step)%n+n)%n;unsigned kind;if(!current)return 0;if(!rr_voice_role(current,seat,&kind,NULL))continue;for(unsigned p=0;p+0x4000<=size;p+=0x4000)if((le32(b+p)&0xffff00ffu)==(0xa0000000u|kind)&&b[p+1]>=0x81)return current;}return 0;}
+ current=rr_voice_canonical(current);
+ for(int i=0;i<n;i++){current=((current+step)%n+n)%n;unsigned kind;if(!current)return 0;if(rr_voice_canonical(current)!=current||!rr_voice_role(current,seat,&kind,NULL))continue;for(unsigned p=0;p+0x4000<=size;p+=0x4000)if((le32(b+p)&0xffff00ffu)==(0xa0000000u|kind)&&b[p+1]>=0x81)return current;}return 0;}
 int rr_owner_voice_next(const wchar_t*path,int current,int seat){unsigned size=0;const unsigned char*b=rr_owner_taunts(path,&size);return rr_voice_next_role(b,size,current,seat,1);}
 int rr_owner_voice_step(const wchar_t*path,int current,int seat,int step){unsigned size=0;const unsigned char*b=rr_owner_taunts(path,&size);return rr_voice_next_role(b,size,current,seat,step<0?-1:1);}
 /* A catalogue block: id at +0 (0xA000ssKK, set ss >= 0x81, kind KK), clip
@@ -239,6 +254,7 @@ static void load_font(Disc*d,Entry root,const char*path,RrFont*f){Entry e;if(!fi
  for(unsigned i=0;i<n;i++){unsigned char*g=b+32+i*11;f->glyph[i]=(RrGlyph){le16(g),g[2],g[3],le16(g+4),le16(g+6),g[8],(signed char)g[9],(signed char)g[10]};if(le16(g)=='H')f->cap=g[3];}
 done:free(b);}
 static const RrGlyph*glyph(const RrFont*f,unsigned c){for(unsigned i=0;i<f->count;i++)if(f->glyph[i].code==c)return f->glyph+i;return NULL;}
+#ifdef _WIN32
 int rr_original_text(HDC dc,const wchar_t*text,int x,int y,int w,int h,int size,int title,COLORREF color){
  RrFont*f=fonts+(title!=0);if(!f->alpha||!text||w<=0||h<=0)return 0;POINT p[2]={{0,0},{w,h}};LPtoDP(dc,p,2);int pw=abs(p[1].x-p[0].x),ph=abs(p[1].y-p[0].y);if(!pw||!ph||pw>7680||ph>4320)return 0;
  BITMAPINFO bi={0};bi.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);bi.bmiHeader.biWidth=pw;bi.bmiHeader.biHeight=-ph;bi.bmiHeader.biPlanes=1;bi.bmiHeader.biBitCount=32;uint32_t*bits;HBITMAP bitmap=CreateDIBSection(dc,&bi,DIB_RGB_COLORS,(void**)&bits,NULL,0);if(!bitmap)return 0;memset(bits,0,(size_t)pw*ph*4);double sx=(double)size/f->cap*pw/w*.625,sy=(double)size/f->cap*ph/h;double cx=0,cy=0,line=(size+5.0)*ph/h;
@@ -257,6 +273,10 @@ int rr_original_text(HDC dc,const wchar_t*text,int x,int y,int w,int h,int size,
  cx+=advance;}
  HDC src=CreateCompatibleDC(dc);HGDIOBJ old=SelectObject(src,bitmap);BLENDFUNCTION blend={AC_SRC_OVER,0,255,AC_SRC_ALPHA};AlphaBlend(dc,x,y,w,h,src,0,0,pw,ph,blend);SelectObject(src,old);DeleteDC(src);DeleteObject(bitmap);return 1;
 }
+#else
+/* Linux: the GDI drawing above is the Windows launcher's; the Linux launcher draws text itself. */
+int rr_original_text(HDC dc,const wchar_t*text,int x,int y,int w,int h,int size,int title,COLORREF color){(void)dc;(void)text;(void)x;(void)y;(void)w;(void)h;(void)size;(void)title;(void)color;return 0;}
+#endif
 static void load_bars(Disc*d,Entry root){Entry e;if(!find_file(d,root,"/DATA/FE/FEMISC.PSH",&e))return;unsigned char*b=read_entry(d,e);if(!b)return;if(e.size>=16&&!memcmp(b,"SHPP",4)){unsigned n=le32(b+8);if(n<=256&&16+n*8<=e.size)for(unsigned i=0;i<n;i++){unsigned char*r=b+16+i*8;int index=!memcmp(r,"BTNN",4)?9:!memcmp(r,"BTNH",4)?10:-1;if(index<0)continue;unsigned o=le32(r+4);if(o>e.size-16||b[o]!=0x42)continue;unsigned w=le16(b+o+4),h=le16(b+o+6);if(!w||!h||w>1024||h>1024||(size_t)w*h*2>e.size-o-16)continue;Image*a=images+index;a->w=w;a->h=h;a->pixels=malloc((size_t)w*h*4);if(!a->pixels)continue;for(unsigned j=0;j<w*h;j++){unsigned c=le16(b+o+16+j*2);a->pixels[j]=((c&31)*255/31<<16)|(((c>>5)&31)*255/31<<8)|((c>>10)&31)*255/31;}}}free(b);}
 
 static void load_fonts(Disc*d,Entry root){load_font(d,root,"/DATA/FE/BTN_FONT.PFN",fonts);load_font(d,root,"/DATA/FE/HDR_FONT.PFN",fonts+1);}

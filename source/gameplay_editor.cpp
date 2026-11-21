@@ -185,6 +185,8 @@ void gameplay_tick(bool racing, bool paused) {
 }
 
 namespace {
+#ifdef _WIN32
+// Linux: no editor window yet (the page's file side above still loads and applies game-edits.ini).
 // ---- Page window ----------------------------------------------------------------
 enum {ID_HINT = 400, ID_LIST, ID_VALUE, ID_HELP, ID_SLIDER, ID_MINUS, ID_PLUS, ID_RESET_ONE, ID_RESET_ALL, ID_FIVE_O};
 HWND page, list, value_label, help_label, slider; HFONT font_; unsigned shown = ~0u;
@@ -284,6 +286,9 @@ HWND create(HWND parent, HFONT font) {
         wc.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512)); wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1); RegisterClassW(&wc); reg = true;}
     return CreateWindowExW(WS_EX_CONTROLPARENT, L"JailbreakEditorGameplay", L"", WS_CHILD, 0, 0, 10, 10, parent, nullptr, GetModuleHandleW(nullptr), nullptr);
 }
+#else
+HWND create(HWND, HFONT) {return nullptr;}
+#endif
 const Page page_def = {L"Gameplay", "[gameplay]", create, load_line, loaded, unsaved, serial, write, log, commit, discard};
 }
 const rrpc::editor::Page& rrpc::editor::gameplay_page() {return page_def;}

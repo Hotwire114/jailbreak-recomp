@@ -56,7 +56,7 @@ bool race_overlay(){return word(0x800C6E98)==0x24A500A2u&&word(0x800C5F9C)==0x24
 uint32_t player_record(){uint32_t base=word(0x8005B3A0);if(!ram(base,16*0x448))return 0;for(unsigned i=0;i<16;i++)if((word(base+i*0x448+0xAC)&0xffff)==0)return base+i*0x448;return 0;}
 
 // PS1 pad bits (active low).
-enum:uint16_t{SELECT=1<<0,START=1<<3,UP=1<<4,RIGHT=1<<5,DOWN=1<<6,LEFT=1<<7,L1=1<<10,R1=1<<11,TRIANGLE=1<<12,CIRCLE=1<<13,CROSS=1<<14,SQUARE=1<<15};
+enum:uint16_t{SELECT=1<<0,R2=1<<9,START=1<<3,UP=1<<4,RIGHT=1<<5,DOWN=1<<6,LEFT=1<<7,L1=1<<10,R1=1<<11,TRIANGLE=1<<12,CIRCLE=1<<13,CROSS=1<<14,SQUARE=1<<15};
 int key_turn;uint64_t last_turn;bool key_q,key_e;   // Q / E held: turn the camera
 // Time Trials > Race Options rows Opponents, Traffic, Cops: menu list descriptors
 // {count 2, action 7, handler 0x0B / 0x0C / 0x0D, selected: 0 On, 1 Off}
@@ -76,6 +76,7 @@ Phase phase=OFF;int step;uint64_t step_at,press_until,phase_at,last_poll;uint32_
 uint16_t last_real=0xffff;uint64_t last_key;
 int row;double yaw,yaw_base;bool yaw_set;
 std::atomic<int> shown{-1};
+int bike_view;uint32_t bike_own;   // the Kaffe bike shown (set_bike_view)
 
 // One press: the button down for 120 ms, from now.
 uint16_t pressing;
@@ -157,7 +158,7 @@ void draw_cover(int k,const char*line1,const char*line2){
     double w2=text_width(REGULAR,line2,17);text(im,REGULAR,line2,(im.w-w2)/2,296,17,0xffb8c4e0u);
 }
 void draw_panel(){
-    RiderOptions o=rider_options();uint64_t key=(uint64_t)row;for(int r=0;r<8;r++)key=key*61+(uint64_t)look_value(o,r);
+    RiderOptions o=rider_options();uint64_t key=(uint64_t)row*2+(uint64_t)bike_view;for(int r=0;r<8;r++)key=key*61+(uint64_t)look_value(o,r);
     if(key==panel_key&&panel_front.load()>=0)return;panel_key=key;
     const int k=(panel_drawn+1)%3;Image&im=panels[k];im.w=PW;im.h=PH;im.px.assign((size_t)PW*PH,0xff000000u);
     fill(im,0,0,PW,PH,0xff101c44u,0xff050a1cu);fill(im,PW-4,0,PW,PH,0xffe0a020u,0xffe0a020u);
@@ -180,7 +181,7 @@ void draw_panel(){
     const int hy=204+370+4*82+12;text(im,REGULAR,l1[setting_of(row)/2],48,hy,16,0xffd8e0f0u);
     char seat[64];std::snprintf(seat,sizeof seat,"Showing Player %d's look. Not in Five-O races.",seat_of(row)+1);text(im,REGULAR,seat,48,hy+32,16,0xffa8b4d0u);
     text(im,REGULAR,"Up/Down: choose    Left/Right: change",48,PH-92,15,0xffe0a020u);
-    text(im,REGULAR,"L1/R1 or Q/E: turn the camera",48,PH-66,15,0xffe0a020u);
+    text(im,REGULAR,bike_view?"L1/R1 or Q/E: turn    R2 or K: your own bike":"L1/R1 or Q/E: turn    R2 or K: Kaffe bike",48,PH-66,15,0xffe0a020u);
     text(im,REGULAR,"Back (Esc / Triangle): main menu",48,PH-40,15,0xffe0a020u);
     panel_drawn=k;panel_front.store(k);
 }
@@ -211,25 +212,111 @@ void camera_in(uint32_t view){
     put16(c+0x7C,(int)std::lround(std::atan2(f[0],f[2])*4096/(2*kPi))&0xFFF);
     psx_mod_counter_add("rr.showroom.camera",1);
 }
+
+// ---- photo mode (owner, 19 Nov) ----
+// While the game's own pause menu is up in a one-player race (offline, not the
+// showroom), Pause options > Photo mode (rider_menu.cpp) or P turns the paused race into a photo: no HUD and no pause
+// menu (the showroom's HUD switch), and a free camera that circles the player's
+// bike in the game's own camera (as the showroom's; the race stays paused).
+// D-pad / arrow keys move it round and up / down, L1 / R1 (or Q / E, Page Up /
+// Page Down) bring it closer / further. Triangle, Circle, Cross, Start, Select, Esc,
+// Backspace or P go back to the pause menu, with the game's camera as it was.
+// A one-line hint shows for the first four seconds. Pads reach the game not at
+// all while it is on.
+bool photo;double ph_yaw,ph_height,ph_radius;uint8_t ph_saved[0x80];bool ph_have;uint64_t ph_since,ph_poll;uint16_t ph_last=0xffff,ph_mask;   // ph_mask: buttons held as photo mode closed, kept from the game until let go
+bool ph_k[6];   // held keys: left right up down near far
+const double PH_AIM=-95;
+Image hint;std::atomic<int> hint_ready{0};
+int players(){const uint32_t c=word(0x8005B2F8);return ram(c,0x34)?(int)word(c+0x30):0;}
+bool photo_possible(){return phase==OFF&&!rrpc::netplay()&&race_overlay()&&players()==1&&rrpc::race_pause_menu()&&player_record();}
+void photo_begin(){
+    const uint32_t cam=word(0x8005AEC0),rec=player_record();if(!ram(cam,0x80)||!rec)return;
+    uint8_t*r=memory_get_ram_ptr();std::memcpy(ph_saved,r+(cam&0x1fffff),0x80);ph_have=true;
+    int32_t b[3],c[3];std::memcpy(b,r+((rec+0xC)&0x1fffff),12);std::memcpy(c,ph_saved+0x1C,12);
+    // From where the game's camera is now, so the picture starts as it was.
+    const double dx=c[0]-b[0],dz=c[2]-b[2];ph_yaw=std::atan2(dx,dz);ph_radius=std::clamp(std::sqrt(dx*dx+dz*dz),120.0,3000.0);ph_height=std::clamp((double)(c[1]-b[1]),-1500.0,-20.0);
+    photo=true;ph_since=ph_poll=SDL_GetTicks();for(bool&k:ph_k)k=false;   // ph_last stays: the Cross that chose Photo mode is still held
+    if(!hint_ready.load()){hint.w=1400;hint.h=48;hint.px.assign((size_t)hint.w*hint.h,0);fill(hint,0,0,hint.w,hint.h,0xff101c44u,0xff050a1cu);
+        const char*l="PHOTO MODE    D-pad / arrows: move    L1 / R1 or Q / E: zoom    Triangle / Esc: back";
+        text(hint,REGULAR,l,(hint.w-text_width(REGULAR,l,20))/2,14,20,0xffffffffu);hint_ready.store(1);}
+    psx_mod_counter_add("rr.photo.opened",1);
+}
+// restore false: the race is gone (or online), so the saved camera has no home.
+void photo_end(bool restore=true){
+    if(restore&&photo&&ph_have){const uint32_t cam=word(0x8005AEC0);if(ram(cam,0x80))std::memcpy(memory_get_ram_ptr()+(cam&0x1fffff),ph_saved,0x80);}
+    photo=false;ph_have=false;
+}
+void photo_camera(uint32_t view){
+    if(view!=0||!photo)return;const uint32_t cam=word(0x8005AEC0),rec=player_record();if(!ram(cam,0x80)||!rec)return;
+    uint8_t*r=memory_get_ram_ptr();int32_t b[3];std::memcpy(b,r+((rec+0xC)&0x1fffff),12);
+    int16_t m[9];std::memcpy(m,ph_saved+0x5C,18);
+    const double down_scale=[&]{double l=std::sqrt((double)m[3]*m[3]+(double)m[4]*m[4]+(double)m[5]*m[5])/4096;return l>.5&&l<1.2?l:.833;}();
+    const double T[3]={(double)b[0],b[1]+PH_AIM,(double)b[2]},C[3]={b[0]+ph_radius*std::sin(ph_yaw),b[1]+ph_height,b[2]+ph_radius*std::cos(ph_yaw)};
+    double f[3]={T[0]-C[0],T[1]-C[1],T[2]-C[2]};auto unit=[](double*v){double n=std::sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2]);if(n>0)for(int i=0;i<3;i++)v[i]/=n;};unit(f);
+    double rt[3]={f[2],0,-f[0]};unit(rt);const double dn[3]={f[1]*rt[2]-f[2]*rt[1],f[2]*rt[0]-f[0]*rt[2],f[0]*rt[1]-f[1]*rt[0]};
+    uint8_t*c=r+(cam&0x1fffff);
+    for(int i=0;i<3;i++){int32_t v=(int32_t)std::lround(C[i]);std::memcpy(c+0x1C+4*i,&v,4);int32_t fine=v*1024;std::memcpy(c+0x10+4*i,&fine,4);}
+    for(int i=0;i<3;i++){put16(c+0x5C+2*i,(int)std::lround(rt[i]*4096));put16(c+0x62+2*i,(int)std::lround(dn[i]*4096*down_scale));put16(c+0x68+2*i,(int)std::lround(f[i]*4096));}
+    put16(c+0x7C,(int)std::lround(std::atan2(f[0],f[2])*4096/(2*kPi))&0xFFF);
+    psx_mod_counter_add("rr.photo.camera",1);
+}
+// One pad poll: held directions move the camera (pad and keys together count once).
+void photo_move(uint16_t real,uint64_t now){
+    const double dt=std::min<double>(100.0,(double)(now-ph_poll))/1000.0;ph_poll=now;
+    auto dir=[](int pad,int key){return std::clamp(pad+key,-1,1);};
+    const int x=dir(((real&RIGHT)?0:1)-((real&LEFT)?0:1),(ph_k[1]?1:0)-(ph_k[0]?1:0));
+    const int y=dir(((real&UP)?0:1)-((real&DOWN)?0:1),(ph_k[2]?1:0)-(ph_k[3]?1:0));
+    const int z=dir(((real&R1)?0:1)-((real&L1)?0:1),(ph_k[5]?1:0)-(ph_k[4]?1:0));
+    ph_yaw+=x*1.4*dt;ph_height=std::clamp(ph_height-y*450*dt,-1500.0,-20.0);ph_radius=std::clamp(ph_radius*std::pow(1.9,z*dt),120.0,3000.0);
+}
+// The Kaffe bike (owner, 19 Nov): R2 or K shows the player's bike as the second
+// bike model (model table 0x800CE1B0 entry 1, id 0x6D: the sport bike the Kaffe
+// gang rides in Jail Break) and back, so a paint can be seen on it. Only the
+// showroom's bike changes: the record's model entry (+0x60), +8 = 0xFF for the
+// game to load the mesh, as the Rider look's outfits do for riders; the bike the
+// player races is never touched, and leaving puts the race's own model back.
+void set_bike_view(int v){
+    const uint32_t rec=player_record();if(!rec||(word(0x800CE1C0)&0xFFFF)!=0x6D)return;
+    if(!bike_own)bike_own=word(rec+0x60);const uint32_t want=v?0x800CE1C0u:bike_own;
+    if(word(rec+0x60)!=want){psx_mod_write_word(rec+0x60,want);psx_mod_write_byte(rec+8,0xFF);}
+    bike_view=v;panel_key=~0ull;psx_mod_counter_add(v?"rr.showroom.kaffe_bike":"rr.showroom.own_bike",1);
+}
 // from 1: in the race (the pause menu first); 6: the race is already over.
-void leave(uint64_t now,int from){phase=LEAVING;step=from;step_at=now;phase_at=now;shown.store(-1);
+void leave(uint64_t now,int from){if(bike_view)set_bike_view(0);bike_own=0;phase=LEAVING;step=from;step_at=now;phase_at=now;shown.store(-1);
     draw_cover(1,"BACK TO THE MENU","Your rider look is saved.");cover_front.store(1);}
 }
 // gpu_geometry.py HUD_EDIT (GPU side): the race's 2D overlay is moved off screen.
-extern "C" int rr_showroom_hud_off(void){return phase==LIVE;}
+extern "C" int rr_showroom_hud_off(void){return phase==LIVE||photo;}
 namespace rrpc {
 bool showroom_active(){return phase!=OFF;}
+bool photo_active(){return photo;}
+bool photo_start(){if(!photo_possible())return false;photo_begin();return photo;}
 bool showroom_mute(){return phase==TO_RACE||phase==LEAVING;}
 int showroom_seat(){return shown.load();}
 bool showroom_begin(){
     if(phase!=OFF||netplay()||!rider_options().menu||!root_menu())return false;
     // The stage: a demo course (demo_courses.cpp), Meadows unless RR_SHOWROOM_STAGE says.
     const char*s=std::getenv("RR_SHOWROOM_STAGE");demo_showroom(s?std::clamp(std::atoi(s),0,5):0);
-    rider_menu_leave();phase=TO_RACE;step=0;turned_off=0;tt_menu=0;phase_at=SDL_GetTicks();step_at=phase_at+150;press_until=0;yaw=0;yaw_set=false;row=0;
+    rider_menu_leave();phase=TO_RACE;step=0;turned_off=0;tt_menu=0;phase_at=SDL_GetTicks();step_at=phase_at+150;press_until=0;yaw=0;yaw_set=false;row=0;bike_view=0;bike_own=0;
     draw_cover(0,"OPENING THE SHOWROOM","Loading your rider and bike...");cover_front.store(0);psx_mod_counter_add("rr.showroom.opened",1);return true;
 }
 bool showroom_pad(int slot,uint16_t real,uint16_t&out){
-    if(phase==OFF)return false;
+    if(phase==OFF){
+        const uint64_t now=SDL_GetTicks();
+        if(photo&&(netplay()||!race_overlay()||!rrpc::race_pause_menu())){photo_end(!netplay()&&race_overlay());psx_mod_counter_add("rr.photo.race_left",1);}
+        if(!photo){
+            if(slot!=0)return false;ph_last=real;ph_mask&=(uint16_t)~real;if(!ph_mask)return false;
+            out=(uint16_t)(real|ph_mask);return true;}
+        out=0xffff;if(slot!=0)return true;
+        const uint16_t pressed=(uint16_t)(ph_last&~real);ph_last=real;
+        // Not in the first 250 ms: the key that chose Photo mode (Enter is Start) can
+        // reach the pad only after photo_start, and would close it at once.
+        if((pressed&(TRIANGLE|CIRCLE|START|SELECT|CROSS))&&now-ph_since>=250){
+            psx_mod_counter_add(pressed&TRIANGLE?"rr.photo.closed_triangle":pressed&CIRCLE?"rr.photo.closed_circle":pressed&START?"rr.photo.closed_start":pressed&SELECT?"rr.photo.closed_select":"rr.photo.closed_cross",1);
+            if(now-ph_since<300)psx_mod_counter_add("rr.photo.closed_early",1);
+            ph_mask=(uint16_t)~real;photo_end();psx_mod_counter_add("rr.photo.closed",1);return true;}
+        photo_move(real,now);return true;
+    }
     out=0xffff;if(slot!=0)return true;   // pad 2 stays out of it
     const uint64_t now=SDL_GetTicks();const uint16_t pressed=(uint16_t)(last_real&~real);last_real=real;
     if(phase==TO_RACE){
@@ -262,6 +349,7 @@ bool showroom_pad(int slot,uint16_t real,uint16_t&out){
             if(pressed&UP){row=(row+ROWS-1)%ROWS;}if(pressed&DOWN){row=(row+1)%ROWS;}
             if(pressed&LEFT)change(-1);if(pressed&(RIGHT|CROSS))change(1);
             if(pressed&(TRIANGLE|CIRCLE)){leave(now,1);return true;}
+            if(pressed&R2)set_bike_view(!bike_view);
         }
         shown.store(seat_of(row));draw_panel();return true;
     }
@@ -287,7 +375,15 @@ bool showroom_pad(int slot,uint16_t real,uint16_t&out){
     return false;
 }
 bool showroom_event(const SDL_Event&e){
-    if(phase==OFF)return false;
+    if(phase==OFF){
+        if(e.type!=SDL_EVENT_KEY_DOWN&&e.type!=SDL_EVENT_KEY_UP)return false;
+        const bool down=e.type==SDL_EVENT_KEY_DOWN;const auto k=e.key.key;
+        if(!photo){if(down&&!e.key.repeat&&k==SDLK_P&&photo_possible()){photo_begin();return true;}return false;}
+        const int i=k==SDLK_LEFT?0:k==SDLK_RIGHT?1:k==SDLK_UP?2:k==SDLK_DOWN?3:(k==SDLK_Q||k==SDLK_PAGEUP)?4:(k==SDLK_E||k==SDLK_PAGEDOWN)?5:-1;
+        if(i>=0)ph_k[i]=down;
+        else if(down&&!e.key.repeat&&(k==SDLK_ESCAPE||k==SDLK_BACKSPACE||k==SDLK_P)){photo_end();psx_mod_counter_add("rr.photo.closed_key",1);psx_mod_counter_add("rr.photo.closed",1);}
+        return true;   // the keys belong to photo mode while it is on
+    }
     if(e.type==SDL_EVENT_KEY_DOWN||e.type==SDL_EVENT_KEY_UP){const bool down=e.type==SDL_EVENT_KEY_DOWN;
         if(e.key.key==SDLK_Q)key_q=down;else if(e.key.key==SDLK_E)key_e=down;key_turn=(key_e?1:0)-(key_q?1:0);}
     if(e.type==SDL_EVENT_KEY_UP)return true;
@@ -296,6 +392,7 @@ bool showroom_event(const SDL_Event&e){
         const auto k=e.key.key;last_key=SDL_GetTicks();
         if(k==SDLK_UP)row=(row+ROWS-1)%ROWS;else if(k==SDLK_DOWN)row=(row+1)%ROWS;else if(k==SDLK_LEFT)change(-1);else if(k==SDLK_RIGHT||k==SDLK_RETURN||k==SDLK_KP_ENTER)change(1);
         else if(k==SDLK_ESCAPE||k==SDLK_BACKSPACE){leave(last_key,1);return true;}
+        else if(k==SDLK_K)set_bike_view(!bike_view);
         shown.store(seat_of(row));
     }
     return true;
@@ -315,6 +412,11 @@ void unhide(){if(!hidden)return;uint8_t*r=memory_get_ram_ptr();std::memcpy(r+((h
 void showroom_observe(uint32_t pc){
     if(pc!=0x8001CD5C&&pc!=0x80067AC4&&pc!=0x80068438&&pc!=0x800C8B24&&pc!=0x800C8CD4)return;
     if(pc==0x80068438){unhide();return;}
+    if(photo&&debug_cpu_ptr&&race_overlay()){
+        if(pc==0x8001CD5C||(pc==0x80067AC4&&word(0x80067AC4)==0x27BDFF88u))photo_camera(0);
+        else if(pc==0x800C8B24){if(debug_cpu_ptr->gpr[4]<=3)photo_camera(debug_cpu_ptr->gpr[4]);}
+        else if(pc==0x800C8CD4&&debug_cpu_ptr->gpr[4]<=3)psx_mod_write_byte(0x800D8060+debug_cpu_ptr->gpr[4],0);
+        return;}
     if(phase!=LIVE||!debug_cpu_ptr||!race_overlay())return;
     // The race frame starts at 0x8001CD5C: the showroom camera is in place
     // before the game copies it for its draws (road, riders, scenery), and again
@@ -331,6 +433,9 @@ void showroom_observe(uint32_t pc){
     else psx_mod_write_byte(0x800D8060+view,0);
 }
 int showroom_overlay(int ww,int wh,const uint32_t**pixels,int*w,int*h,int*x,int*y,int*dw,int*dh){
+    if(photo&&ww>0&&wh>0&&hint_ready.load()&&SDL_GetTicks()-ph_since<4000){
+        // The hint, across the bottom, for the first four seconds only.
+        *pixels=hint.px.data();*w=hint.w;*h=hint.h;*dw=ww*7/10;*dh=*dw*hint.h/hint.w;*x=(ww-*dw)/2;*y=wh-*dh-wh/24;return 1;}
     if(phase==OFF||ww<=0||wh<=0)return 0;
     const int c=cover_front.load();
     if(c>=0){const Image&im=covers[c];*pixels=im.px.data();*w=im.w;*h=im.h;*x=0;*y=0;*dw=ww;*dh=wh;return 1;}

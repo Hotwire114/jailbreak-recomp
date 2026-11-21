@@ -102,6 +102,12 @@ target_sources(rr-game PRIVATE "${RR_PRIVATE_ROOT}/stage2/guard/dirty_ram_interp
  "${RR_PRIVATE_ROOT}/stage2/kernel-native/rr_kernel_code_redirect.c"
  "${RR_PRIVATE_ROOT}/stage2/kernel-native/rr_kernel_code_sdk.c")
 target_include_directories(rr-game PRIVATE "${PSXRECOMP_ROOT}/runtime/src" "${RR_PRIVATE_ROOT}/stage2/kernel-native")
+# Linux: <windows.h> and friends are linux-compat/ (the few Windows calls the PC code uses, on
+# POSIX); the Windows build never sees that folder.
+if(NOT WIN32)
+  target_include_directories(rr-game BEFORE PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/linux-compat")
+  target_sources(rr-game PRIVATE linux-compat/rr_win32_linux.c)
+endif()
 target_compile_definitions(rr-game PRIVATE RR_STRICT_NATIVE=1)
 if(RR_NETPLAY)
   # RR_BUILD_FINGERPRINT (install_game.py): the same for every player with this release and
@@ -150,10 +156,18 @@ elseif(RR_PGO_USE AND EXISTS "${RR_PGO_USE}")
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${RR_PGO_USE}")
   # The linker's call-graph function sort (fed by the profile) orders code
   # differently on every link; without it every player's build is identical.
-  target_link_options(rr-game PRIVATE "-Wl,-Xlink=-call-graph-profile-sort:no")
+  if(WIN32)
+    target_link_options(rr-game PRIVATE "-Wl,-Xlink=-call-graph-profile-sort:no")
+  else()
+    target_link_options(rr-game PRIVATE "-Wl,--call-graph-profile-sort=none")
+  endif()
 endif()
 # No symbol table either: it names CMake's per-folder object paths (and the game never reads it).
-target_link_options(rr-game PRIVATE "-Wl,--no-insert-timestamp" "-Wl,--build-id=none" "-Wl,--strip-all")
+if(WIN32)
+  target_link_options(rr-game PRIVATE "-Wl,--no-insert-timestamp" "-Wl,--build-id=none" "-Wl,--strip-all")
+else()
+  target_link_options(rr-game PRIVATE "-Wl,--build-id=none" "-Wl,--strip-all")
+endif()
 
 # Fast-timing generated code: same flags as rr-game, patched timing headers first.
 execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/fast_timing.py"
@@ -233,7 +247,18 @@ if(RR_THINLTO)
   endif()
 endif()
 
+# The Windows link keeps its exact option order (players' builds stay byte-identical).
+# Windows: GDI (launcher-shared text drawing), BCrypt (SHA-256), AlphaBlend. Linux: shm_open
+# (librt on older glibc) and threads.
+if(WIN32)
 target_link_options(rr-game PRIVATE "-Wl,--wrap=func_8002CDC8" "-Wl,--wrap=func_8002D718" "-Wl,--wrap=debug_server_cyc_observe"
  "-Wl,--wrap=SDL_GL_SwapWindow" "-Wl,--wrap=gpu_vblank_tick" "-Wl,--wrap=spu_write"
  "-Wl,--wrap=SDL_CreateWindow" "-lgdi32" "-lbcrypt" "-lmsimg32"
  "-Wl,--wrap=SDL_PollEvent" "-Wl,--wrap=sio_set_pad_state_slot" "-Wl,--wrap=gl_renderer_init_context")
+else()
+target_link_options(rr-game PRIVATE "-Wl,--wrap=func_8002CDC8" "-Wl,--wrap=func_8002D718" "-Wl,--wrap=debug_server_cyc_observe"
+ "-Wl,--wrap=SDL_GL_SwapWindow" "-Wl,--wrap=gpu_vblank_tick" "-Wl,--wrap=spu_write"
+ "-Wl,--wrap=SDL_CreateWindow"
+ "-Wl,--wrap=SDL_PollEvent" "-Wl,--wrap=sio_set_pad_state_slot" "-Wl,--wrap=gl_renderer_init_context")
+target_link_libraries(rr-game PRIVATE pthread rt)
+endif()

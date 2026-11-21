@@ -74,7 +74,7 @@ def _version(package):
 
 def header(script, package, data_root, workspace=None):
     lines = [f'==== {script} {time.strftime("%Y-%m-%d %H:%M:%S")} ====',
-             f'Jailbreak Recomp {_version(package)}; Windows {platform.version()}; Python {platform.python_version()}']
+             f'Jailbreak Recomp {_version(package)}; {"Windows " + platform.version() if os.name == "nt" else platform.system() + " " + platform.release()}; Python {platform.python_version()}']
     for name, folder in (('Game folder', data_root), ('Build tools', workspace), ('Package', package)):
         if not folder: continue
         root, kind, fs = _volume(folder)

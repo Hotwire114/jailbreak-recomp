@@ -90,6 +90,19 @@ static LRESULT CALLBACK cp_dialog_proc(HWND window,UINT msg,WPARAM wp,LPARAM lp)
 }
 static void cp_add_code(void){
     if(!cp_loaded)cp_load();if(cp_custom_n>=RC_MAX_CUSTOM){notice(L"UP TO 16 CUSTOM CODES — REMOVE ONE FIRST (DEL)");return;}
+#ifndef _WIN32
+    /* Linux: the launcher's own text box, twice (the name, then the codes); same checks as the dialog. */
+    {wchar_t name[64]=L"",wide[2048]=L"";char codes[2048],why[96];RcLine l[RC_MAX_LINES];
+     for(;;){if(!rr_linux_prompt(mainwindow,L"Add custom code",L"Name",name,64,RC_NAME-1,0))return;
+         while(name[0]==L' ')memmove(name,name+1,wcslen(name)*sizeof *name);{size_t n=wcslen(name);while(n&&name[n-1]==L' ')name[--n]=0;}
+         if(cp_name_valid(name))break;MessageBoxW(mainwindow,L"Give the code a name: 1–31 plain characters (letters, numbers, spaces, punctuation).",L"Add custom code",MB_OK);}
+     for(;;){if(!rr_linux_prompt(mainwindow,L"Add custom code",L"GameShark codes, one per line (80 / 30 writes, D0-D3 / E0-E3 conditions)",wide,2048,2000,1))return;
+         WideCharToMultiByte(CP_UTF8,0,wide,-1,codes,sizeof codes,NULL,NULL);int n=rc_parse(codes,l,RC_MAX_LINES,why,sizeof why);
+         if(n<=0){wchar_t text[200];swprintf(text,200,L"%s\n\nEach line: 8 hex digits, a space, 4 hex digits (for example 800D5766 5A5A).",n<0?why:"Paste at least one code.");MessageBoxW(mainwindow,text,L"Add custom code",MB_OK|MB_ICONWARNING);continue;}
+         int k=cp_custom_n;wcscpy(cp_custom_name[k],name);rc_format(l,n,cp_custom_code[k],RC_TEXT);cp_custom_on[k]=0;cp_custom_n++;
+         if(cp_save())notice(L"CUSTOM CODE ADDED — SELECT IT TO SWITCH IT ON");else cp_custom_n--;
+         InvalidateRect(mainwindow,NULL,FALSE);return;}}
+#endif
     WNDCLASSW wc={0};wc.lpfnWndProc=cp_dialog_proc;wc.hInstance=GetModuleHandleW(NULL);wc.lpszClassName=L"JailbreakCheatCode";wc.hCursor=LoadCursorW(NULL,IDC_ARROW);wc.hbrBackground=(HBRUSH)(COLOR_WINDOW+1);RegisterClassW(&wc);
     CodePrompt state={0};RECT r;GetWindowRect(mainwindow,&r);UINT dpi=window_dpi(mainwindow);
 #define D(v) MulDiv(v,dpi,96)

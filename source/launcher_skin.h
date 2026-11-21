@@ -75,6 +75,11 @@ static int view_rows(int vp,VRow*out,int cap){
         if(it->opens==15||it->page==15)continue;
         /* No Discord in this release. The page's handlers get each row's own number (row 0 is never shown). */
         if(!strcmp(it->id,"discord"))continue;
+#ifndef _WIN32
+        /* Linux: no online play, mods, updater, uninstaller or folder change yet. */
+        {static const char*const linux_hidden[]={"multiplayer","mods","updates","game_folder","uninstall"};int hide=0;
+         for(size_t h=0;h<sizeof linux_hidden/sizeof*linux_hidden;h++)if(!strcmp(it->id,linux_hidden[h]))hide=1;if(hide)continue;}
+#endif
         if(it->flags&TN_GROUP){int gn=it->page==CHEAT_PAGE?cp_custom_count():it->page==10?RR_ACH_COUNT:mod_count;for(int m=0;m<gn&&n<cap;m++){out[n].page=(short)it->page;out[n].row=(short)(it->row+m);out[n].item=(short)i;n++;}}
         else if(n<cap){out[n].page=(short)it->page;out[n].row=(short)it->row;out[n].item=(short)i;n++;}}
     if(vp==0&&dev_unlocked&&n<cap){out[n].page=0;out[n].row=6;out[n].item=-1;n++;}   /* Developer */
@@ -574,7 +579,11 @@ static int CALLBACK font_found(const LOGFONTW*lf,const TEXTMETRICW*tm,DWORD type
 static void ui_pick_face(void){static int done;if(done)return;done=1;LOGFONTW lf={0};lf.lfCharSet=DEFAULT_CHARSET;wcscpy(lf.lfFaceName,L"Bahnschrift");int found=0;HDC dc=GetDC(NULL);EnumFontFamiliesExW(dc,&lf,font_found,(LPARAM)&found,0);ReleaseDC(NULL,dc);if(!found)ui_face=L"Segoe UI";}
 static HFONT ui_font(double size,int weight,DWORD quality){int px=P(size);return CreateFontW(-(px>1?px:1),0,0,0,weight,0,0,0,DEFAULT_CHARSET,OUT_TT_PRECIS,CLIP_DEFAULT_PRECIS,quality,DEFAULT_PITCH|FF_SWISS,ui_face);}
 static void system_text(const wchar_t*s,double x,double y,double w,double h,double size,int weight,uint32_t color,UINT format){
-    if(!s||!*s||w<=0||h<=0)return;HFONT f=ui_font(size,weight,CLEARTYPE_QUALITY);HGDIOBJ old=SelectObject(ui.dc,f);SetBkMode(ui.dc,TRANSPARENT);SetTextColor(ui.dc,cref(color));
+    if(!s||!*s||w<=0||h<=0)return;
+#ifndef _WIN32
+    (void)weight;hd_text(s,x,y,w,h,size*.8,color,format,0,0);return;   /* Linux: no system fonts; the HD font */
+#endif
+    HFONT f=ui_font(size,weight,CLEARTYPE_QUALITY);HGDIOBJ old=SelectObject(ui.dc,f);SetBkMode(ui.dc,TRANSPARENT);SetTextColor(ui.dc,cref(color));
     RECT r={P(x),P(y),P(x+w),P(y+h)};DrawTextW(ui.dc,s,-1,&r,format|DT_NOPREFIX);SelectObject(ui.dc,old);DeleteObject(f);
 }
 static void text_ex(const wchar_t*s,double x,double y,double w,double h,double size,int weight,uint32_t color,UINT format,double spacing,int shadow){
@@ -699,7 +708,7 @@ static void folder_rect(double*r){r[0]=ui.cx+640-340;r[1]=ui.by+620;r[2]=680;r[3
 static int ui_hit(int px,int py,int*row){
     double x=px/ui.k,y=py/ui.k,b[4];*row=-1;
     if(!installed){find_rect(b);if(x>=b[0]&&x<b[0]+b[2]&&y>=b[1]&&y<b[1]+b[3])return HIT_FIND;
-        folder_rect(b);return !busy&&!data_root_given&&!un_finished&&x>=b[0]&&x<b[0]+b[2]&&y>=b[1]&&y<b[1]+b[3]?HIT_FOLDER:HIT_NONE;}
+        folder_rect(b);return RR_FOLDER_LINK&&!busy&&!data_root_given&&!un_finished&&x>=b[0]&&x<b[0]+b[2]&&y>=b[1]&&y<b[1]+b[3]?HIT_FOLDER:HIT_NONE;}
     back_rect(b);if(page&&x>=b[0]&&x<b[0]+b[2]&&y>=b[1]&&y<b[1]+b[3])return HIT_BACK;
     if(arrow_row>=0&&arrow_row==selected&&y>=arrow_y&&y<arrow_y+arrow_h){
         if(x>=arrow_lx&&x<arrow_lx+28){*row=arrow_row;return HIT_PREV;}
@@ -846,7 +855,7 @@ static void draw_setup(void){
         system_text(un_result,ui.cx+190,b[1]+b[3]+20,900,90,17,FW_NORMAL,C_STEEL,DT_CENTER|DT_TOP|DT_WORDBREAK);return;}
     system_text(busy==1?L"Installing your game\u2026":L"Find your game (.bin)",b[0],b[1],b[2],b[3],25,FW_SEMIBOLD,busy?C_DIM:C_WHITE,DT_CENTER|DT_VCENTER|DT_SINGLELINE);
     system_text(L"Select your Road Rash: Jailbreak (USA) disc image: the .bin, or its .cue / .iso.\nIt is checked first, then installed on this PC. No game files are used before that.",ui.cx+190,b[1]+b[3]+20,900,60,17,FW_NORMAL,C_STEEL,DT_CENTER|DT_TOP|DT_WORDBREAK);
-    if(!busy&&!data_root_given){   /* where it installs, changeable before anything is installed */
+    if(RR_FOLDER_LINK&&!busy&&!data_root_given){   /* where it installs, changeable before anything is installed */
         double f[4];folder_rect(f);int hot=hover_hit==HIT_FOLDER;wchar_t shown[64],line[200];if(!PathCompactPathExW(shown,store,44,0))wcsncpy(shown,store,63),shown[63]=0;
         double g=free_gb(store);swprintf(line,200,L"Install to: %ls (%.0f GB free)   \u2022   Change",shown,g<0?0:g);
         if(hot)fill(f[0],f[1],f[2],f[3],C_STEEL,40);outline(f[0],f[1],f[2],f[3],C_STEEL,hot?160:70);

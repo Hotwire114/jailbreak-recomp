@@ -55,6 +55,12 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+// A char string in a wide format: "%hs" on Windows; glibc takes "%s" (ISO C).
+#ifdef _WIN32
+#define RR_WFMT_CHARS L"%hs"
+#else
+#define RR_WFMT_CHARS L"%s"
+#endif
 #include "controls_screen.h"
 #include "pc_services.h"
 #include "mod_plugins.h"
@@ -637,7 +643,7 @@ const char* const kButtonNames[15] = {"left", "right", "up", "down", "square", "
                                       "l1", "l2", "r1", "r2", "start", "select", "l3"};
 std::string ini_string(const std::wstring& file, const wchar_t* section, const char* key) {
     wchar_t k[32], v[64];
-    std::swprintf(k, 32, L"%hs", key);
+    std::swprintf(k, 32, RR_WFMT_CHARS, key);
     GetPrivateProfileStringW(section, k, L"", v, 64, file.c_str());
     std::string out;
     for (const wchar_t* p = v; *p; p++) out += *p < 128 ? (char)*p : '?';

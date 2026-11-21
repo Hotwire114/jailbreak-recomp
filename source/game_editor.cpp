@@ -116,6 +116,8 @@ bool pc_text_locked(const std::string&k){
     return false;
 }
 
+#ifdef _WIN32
+// Linux: no editor window yet; game-edits.ini made on Windows (or by hand) still applies.
 // ---- Window -------------------------------------------------------------------
 enum {ID_LIST=100,ID_EDIT,ID_APPLY,ID_RESET,ID_SAVE,ID_DISCARD,ID_LOG,ID_STATUS,ID_HINT,ID_PAGE};
 HWND list,edit,status,hint,page_box;HFONT font;std::vector<std::string> rows;unsigned shown_serial=~0u;int page,shown_page=-1;
@@ -216,6 +218,7 @@ void run(){
     window=nullptr;running=false;
 }
 
+#endif
 // ---- Game text in guest RAM ---------------------------------------------------
 // The replacement goes 8 KB below the drawing call's stack pointer, in RAM the
 // game never touches: the stack (top 0x801FFFxx) reaches at most ~0xE00 deep
@@ -273,8 +276,12 @@ void editor::game_edits_ensure_loaded(){std::lock_guard<std::mutex> lock(mu);loa
 void game_editor_toggle(){
     if(netplay())return;
     {std::lock_guard<std::mutex> lock(mu);load_locked();}
+#ifdef _WIN32
     if(HWND w=window.load()){ShowWindow(w,SW_RESTORE);SetForegroundWindow(w);return;}
     bool expected=false;if(!running.compare_exchange_strong(expected,true))return;
     std::thread(run).detach();
+#else
+    psx_mod_counter_add("rr.editor.linux_no_window",1);
+#endif
 }
 }

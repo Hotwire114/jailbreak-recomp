@@ -88,11 +88,23 @@ void init(){
 // The chosen character's clips for a slot whose stock block is from set `set`:
 // that set's line (or the next set's that has the character) and, for a
 // two-entry slot, a different line from a following set that fits beside it.
+// Every line a voice has: its kind's clips in set order (both variants for a
+// character that has both), each once; the lieutenants also get their lines from
+// the captains' blocks (second voice: 0x10 Lt Bull, 0x11 Lt Tasha). Owner, 19 Nov.
+const std::vector<Clip>&pool(unsigned kind,unsigned variant){
+ static std::unordered_map<unsigned,std::vector<Clip>>pools;auto&p=pools[kind<<8|variant];if(!p.empty())return p;
+ std::vector<uint32_t>seen;auto add=[&](const unsigned char*blk,unsigned v){Clip c;if(!clip(blk,v,c))return;uint32_t h=fnv(c.data,c.bytes);for(uint32_t x:seen)if(x==h)return;seen.push_back(h);p.push_back(c);};
+ for(unsigned s=1;s<=27;s++){if(variant==2){add(blocks[s][kind],0);add(blocks[s][kind],1);}else add(blocks[s][kind],variant);}
+ const unsigned captain=kind==0x20&&variant==0?0x10:kind==0x21&&variant==0?0x11:0;
+ if(captain)for(unsigned s=1;s<=27;s++)add(blocks[s][captain],1);
+ return p;}
+// The lines for a slot whose stock block is from set `set` (1..30): one from
+// the voice's pool by the set, and for a two-entry slot another from half the
+// pool further on, so each slot's pair differs and every line gets its turn.
 bool pick(unsigned voice,unsigned seat,unsigned set,Clip&a,Clip&b){unsigned kind,variant;if(!rr_voice_role((int)voice,(int)seat,&kind,&variant))return false;
- unsigned from=0;for(unsigned i=0;i<27&&!from;i++){unsigned s=(set-1+i)%27+1;if(clip(blocks[s][kind],variant==2?0:variant,a))from=s;}if(!from)return false;b=a;
- if(variant==2){clip(blocks[from][kind],1,b);return true;}
- uint32_t first=fnv(a.data,a.bytes);
- for(unsigned i=1;i<27;i++){unsigned s=(from-1+i)%27+1;Clip c;if(clip(blocks[s][kind],variant,c)&&a.bytes+c.bytes<=BLOCK-DATA&&fnv(c.data,c.bytes)!=first){b=c;break;}}
+ const auto&p=pool(kind,variant);const unsigned n=(unsigned)p.size();if(!n)return false;
+ const unsigned i=(set+n-1)%n;a=b=p[i];
+ for(unsigned k=0;k+1<n;k++){const Clip&c=p[(i+(n>1?n/2:1)+k)%n];if(c.data!=a.data&&a.bytes+c.bytes<=BLOCK-DATA){b=c;break;}}
  return true;}
 // Rewrite a resident block in RAM: same id, kinds and entry layout, the chosen clips.
 void rebuild(unsigned char*dst,const Clip&a,const Clip&b){unsigned n=entries(dst);

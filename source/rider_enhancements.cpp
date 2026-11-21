@@ -17,6 +17,7 @@
 #include "demo_courses.h"
 #include "jailbreak_you.h"
 #include "showroom.h"
+#include "pc_services.h"
 #include <windows.h>
 #include <cstdint>
 #include <cstring>
@@ -519,9 +520,21 @@ bool ro_stock_ok(){return word(RO_PAGE+0x10)==RO_STOCK&&(uint16_t)half(RO_PAGE+8
 static void random_page(){
     if(rrpc::netplay())return;
     auto*ram=memory_get_ram_ptr();uint8_t*block=ram+(RO_TABLE&0x1fffff);
+    // The block is the top of the race heap (ends near 0x801FA000, PROGRESS-0.15-
+    // game-text-editor.md): after a race it holds that race's leftovers, which
+    // the frontend never uses (zero in the menus until a race has run). Owner,
+    // 19 Nov: the row was gone after a race (rr.random.no_room).
+    static bool raced=false;if(!frontend_overlay())raced=true;
     if(word(0x8009C5C8)==RO_PAGE){
+        // The frontend reloaded the page (stock table again) while ours was up.
+        if(ro_ours&&word(RO_PAGE+0x10)==RO_STOCK&&(uint16_t)half(RO_PAGE+8)==RO_STOCK_RECS){ro_ours=false;psx_mod_counter_add("rr.random.page_reloaded",1);}
         if(ro_ours||!ro_stock_ok())return;
-        for(unsigned i=0;i<sizeof ro_written;i++)if(block[i]){psx_mod_counter_add("rr.random.no_room",1);return;}   // never over anything else
+        // Our own last copy still in the block (its text tail): free to take again.
+        const bool mine=ro_written[10*RO_REC]&&!std::memcmp(block+10*RO_REC,ro_written+10*RO_REC,sizeof ro_written-10*RO_REC);
+        bool empty=true;for(unsigned i=0;i<sizeof ro_written&&empty&&!mine;i++)empty=!block[i];
+        if(!empty&&!raced){psx_mod_counter_add("rr.random.no_room",1);return;}   // never over anything else
+        if(!empty)psx_mod_counter_add("rr.random.race_leftovers",1);
+        raced=false;
         uint8_t*t=ro_written;const uint8_t*s=ram+(RO_STOCK&0x1fffff);std::memset(t,0,sizeof ro_written);std::memcpy(t,s,RO_STOCK_RECS*RO_REC);
         uint8_t*bar=t+8*RO_REC,*val=t+9*RO_REC;std::memcpy(bar,s+6*RO_REC,RO_REC);std::memcpy(val,s+7*RO_REC,RO_REC);
         auto add=[](uint8_t*r,unsigned off,int d){int16_t v;std::memcpy(&v,r+off,2);v=(int16_t)(v+d);std::memcpy(r+off,&v,2);};
@@ -729,6 +742,7 @@ extern "C" void __wrap_debug_server_cyc_observe(uint32_t pc){
     unblink_draw(pc);
     rrpc::rider_menu_observe(pc);
     rrpc::showroom_observe(pc);
+    if((pc==0x80067AC4u||pc==0x80068438u)&&debug_cpu_ptr)rrpc::draw_observe(pc,debug_cpu_ptr->gpr[4],debug_cpu_ptr->gpr[5]);   // teleported riders
     rrpc::voice_observe(pc);
     rrpc::demo_observe(pc);
     // Enlarge first: the widescreen HUD tag guards the label's final vertices.
