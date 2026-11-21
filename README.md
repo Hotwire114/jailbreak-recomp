@@ -2,7 +2,7 @@
   <img src="source/project-logo.png" alt="Jailbreak Recomp logo" width="480">
 </p>
 
-[![Get it on RecompLauncher](https://recomplauncher.com/assets/press/launcher/badge-dark.svg)](https://recomplauncher.com/game/jailbreak-recomp) [![Verified developer on RecompStore](https://recompstore.com/assets/press/verified-dark.svg)](https://recompstore.com/dev/hotwire114)
+[![Verified developer on RecompStore](https://recompstore.com/assets/press/verified-dark.svg)](https://recompstore.com/dev/hotwire114)
 
 # Jailbreak Recomp
 
