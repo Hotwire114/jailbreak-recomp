@@ -308,6 +308,10 @@ default_enabled=true
         # the sysroot's, or the game links without OpenGL. Linked as libGL.so.1, found at run time.
         sysroot=toolbin.parent/'sysroot'
         configure+=['-DOpenGL_GL_PREFERENCE=LEGACY','-DOPENGL_gl_LIBRARY='+str(sysroot/'usr/lib/x86_64-linux-gnu/libGL.so'),'-DOPENGL_INCLUDE_DIR='+str(sysroot/'usr/include')]
+        # The file hash uses OpenSSL when CMake finds it (psx_sha256_file.cmake), else its own SHA-256.
+        # A PC with OpenSSL installed (CachyOS, issue 22 Nov) has it found in /usr, outside the
+        # sysroot clang compiles against: 'openssl/evp.h' file not found. Never look for it.
+        configure+=['-DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=TRUE']
     online=threading.Thread(target=build_online,args=(configure,toolbin,framework,env))
     try:progress=Progress([(build,'offline',None)]+([(store/'runtime-netplay-build','online',online)] if args.netplay_libs else []),2*EACH if args.netplay_libs else JOBS,label)
     except (OSError,ValueError,KeyError):progress=None   # no reference times: the launcher's moving bar
